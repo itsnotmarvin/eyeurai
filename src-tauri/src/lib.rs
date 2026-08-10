@@ -64,9 +64,10 @@ fn tray_image() -> tauri::image::Image<'static> {
             let outer = dx * dx / 0.82 + dy * dy / 0.36;
             let inner = dx * dx / 0.42 + dy * dy / 0.13;
             let pupil = dx * dx + dy * dy;
-            let alpha = if (0.74..=1.08).contains(&outer) || (0.80..=1.16).contains(&inner) {
-                255
-            } else if pupil < 0.075 {
+            let alpha = if (0.74..=1.08).contains(&outer)
+                || (0.80..=1.16).contains(&inner)
+                || pupil < 0.075
+            {
                 255
             } else {
                 0

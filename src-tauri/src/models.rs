@@ -114,8 +114,8 @@ impl ProviderId {
         }
     }
 
-    /// Parse a wire identifier. Accepts a couple of friendly aliases so the
-    /// frontend and CLI can be forgiving.
+    /// Parse friendly aliases in model tests.
+    #[cfg(test)]
     pub fn parse(value: &str) -> Option<ProviderId> {
         match value.trim().to_ascii_lowercase().as_str() {
             "claude" | "anthropic" => Some(ProviderId::Claude),
@@ -255,21 +255,6 @@ impl ProviderErrorInfo {
             doc_url: None,
         }
     }
-
-    pub fn with_remediation(mut self, remediation: impl Into<String>) -> Self {
-        self.remediation = Some(remediation.into());
-        self
-    }
-
-    pub fn with_retry_after(mut self, seconds: Option<u64>) -> Self {
-        self.retry_after_seconds = seconds;
-        self
-    }
-
-    pub fn with_doc_url(mut self, url: impl Into<String>) -> Self {
-        self.doc_url = Some(url.into());
-        self
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,15 +300,6 @@ impl Measure {
 
     pub fn usd(value: f64) -> Self {
         Measure::new(value, Unit::Usd)
-    }
-
-    pub fn percent(value: f64) -> Self {
-        Measure::new(value, Unit::Percent)
-    }
-
-    pub fn labelled(mut self, label: impl Into<String>) -> Self {
-        self.unit_label = Some(label.into());
-        self
     }
 }
 
@@ -538,6 +514,7 @@ impl Freshness {
         }
     }
 
+    #[cfg(test)]
     pub fn cached(fetched_at: DateTime<Utc>, now: DateTime<Utc>, stale_after_seconds: i64) -> Self {
         let age = (now - fetched_at).num_seconds().max(0);
         Freshness {
@@ -621,18 +598,6 @@ impl CredentialRef {
             },
             CredentialRef::AppStore { key } => format!("EyeUrAI secure store entry \"{key}\""),
             CredentialRef::None => "No credential".to_string(),
-        }
-    }
-
-    /// Coarse kind, used by [`ProviderCapability::credential_kinds`].
-    pub fn kind(&self) -> CredentialKind {
-        match self {
-            CredentialRef::ClaudeCli => CredentialKind::ClaudeCli,
-            CredentialRef::CodexCli { .. } => CredentialKind::CodexCli,
-            CredentialRef::Env { .. } => CredentialKind::Env,
-            CredentialRef::Keychain { .. } => CredentialKind::Keychain,
-            CredentialRef::AppStore { .. } => CredentialKind::AppStore,
-            CredentialRef::None => CredentialKind::None,
         }
     }
 }
@@ -829,6 +794,7 @@ impl AccountSnapshot {
     }
 
     /// Highest `used_percent` across windows; the number the tray icon shows.
+    #[cfg(test)]
     pub fn peak_used_percent(&self) -> Option<f64> {
         self.windows
             .iter()
@@ -836,11 +802,6 @@ impl AccountSnapshot {
             .fold(None, |acc: Option<f64>, pct| {
                 Some(acc.map_or(pct, |a| a.max(pct)))
             })
-    }
-
-    /// Soonest reset across windows that carry one.
-    pub fn next_reset_at(&self) -> Option<DateTime<Utc>> {
-        self.windows.iter().filter_map(|w| w.resets_at).min()
     }
 }
 
@@ -944,16 +905,14 @@ impl QuotaSnapshot {
         }
     }
 
-    pub fn empty(generated_at: DateTime<Utc>) -> Self {
-        QuotaSnapshot::new(generated_at, DataSource::None, Vec::new())
-    }
-
+    #[cfg(test)]
     pub fn provider(&self, id: ProviderId) -> Option<&ProviderSnapshot> {
         self.providers.iter().find(|p| p.provider == id)
     }
 
     /// Highest `used_percent` across every account of every provider — the
     /// single number a menu-bar badge can show.
+    #[cfg(test)]
     pub fn peak_used_percent(&self) -> Option<f64> {
         self.providers
             .iter()

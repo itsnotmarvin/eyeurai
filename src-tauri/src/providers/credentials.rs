@@ -51,8 +51,6 @@ pub struct AccountHint {
 #[derive(Debug)]
 pub struct ResolvedCredential {
     pub access_token: Secret,
-    /// OIDC identity token, when the store has one (Codex).
-    pub id_token: Option<Secret>,
     /// Access-token expiry, when the store states it or the token is a JWT.
     pub expires_at: Option<DateTime<Utc>>,
     pub hint: AccountHint,
@@ -62,7 +60,6 @@ impl ResolvedCredential {
     pub fn bearer(token: Secret) -> Self {
         ResolvedCredential {
             access_token: token,
-            id_token: None,
             expires_at: None,
             hint: AccountHint::default(),
         }
@@ -103,12 +100,6 @@ pub struct LocalCredentialResolver {
 impl LocalCredentialResolver {
     pub fn new() -> Self {
         LocalCredentialResolver::default()
-    }
-
-    pub fn with_home(home: PathBuf) -> Self {
-        LocalCredentialResolver {
-            home_override: Some(home),
-        }
     }
 
     fn home(&self) -> Result<PathBuf, ProviderError> {
@@ -189,39 +180,6 @@ impl CredentialResolver for LocalCredentialResolver {
         descriptor: &'a AccountDescriptor,
     ) -> BoxFuture<'a, Result<ResolvedCredential, ProviderError>> {
         Box::pin(async move { self.resolve_inner(descriptor).await })
-    }
-}
-
-/// Chains two resolvers: the first that does not report
-/// `CredentialsMissing` wins. Lets the main agent layer an app-store backed
-/// resolver in front of the local one without editing this module.
-pub struct ChainedResolver {
-    primary: Box<dyn CredentialResolver>,
-    fallback: Box<dyn CredentialResolver>,
-}
-
-impl ChainedResolver {
-    pub fn new(
-        primary: Box<dyn CredentialResolver>,
-        fallback: Box<dyn CredentialResolver>,
-    ) -> Self {
-        ChainedResolver { primary, fallback }
-    }
-}
-
-impl CredentialResolver for ChainedResolver {
-    fn resolve<'a>(
-        &'a self,
-        descriptor: &'a AccountDescriptor,
-    ) -> BoxFuture<'a, Result<ResolvedCredential, ProviderError>> {
-        Box::pin(async move {
-            match self.primary.resolve(descriptor).await {
-                Err(err) if err.kind == crate::models::ProviderErrorKind::CredentialsMissing => {
-                    self.fallback.resolve(descriptor).await
-                }
-                other => other,
-            }
-        })
     }
 }
 
@@ -391,7 +349,6 @@ pub fn parse_claude_credentials(blob: &str) -> Result<ResolvedCredential, Provid
 
     Ok(ResolvedCredential {
         access_token: Secret::new(token.trim()),
-        id_token: None,
         expires_at,
         hint,
     })
@@ -485,7 +442,6 @@ pub fn parse_codex_auth(blob: &str) -> Result<ResolvedCredential, ProviderError>
 
     Ok(ResolvedCredential {
         access_token: access,
-        id_token,
         expires_at,
         hint,
     })

@@ -34,6 +34,7 @@ pub struct JwtClaims {
 }
 
 impl JwtClaims {
+    #[cfg(test)]
     pub fn empty() -> Self {
         JwtClaims {
             subject: None,

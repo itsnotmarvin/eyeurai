@@ -18,7 +18,6 @@
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
-use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
 use super::error::{snippet, ProviderError};
@@ -50,7 +49,6 @@ pub const RETRY_AFTER_CAP: Duration = Duration::from_secs(8);
 pub struct HttpConfig {
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
-    pub max_attempts: u32,
 }
 
 impl Default for HttpConfig {
@@ -58,7 +56,6 @@ impl Default for HttpConfig {
         HttpConfig {
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            max_attempts: DEFAULT_MAX_ATTEMPTS,
         }
     }
 }
@@ -112,7 +109,6 @@ impl<'a> JsonRequest<'a> {
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     inner: reqwest::Client,
-    config: HttpConfig,
 }
 
 impl HttpClient {
@@ -136,11 +132,7 @@ impl HttpClient {
             .build()
             .map_err(|e| ProviderError::internal(format!("could not build HTTP client: {e}")))?;
 
-        Ok(HttpClient { inner, config })
-    }
-
-    pub fn config(&self) -> &HttpConfig {
-        &self.config
+        Ok(HttpClient { inner })
     }
 
     /// Perform a JSON GET with bounded retry.
@@ -392,6 +384,7 @@ pub fn host_of(url: &str) -> String {
 /// Reject anything that is not a conservative identifier before it is placed
 /// into a URL path segment. Used for user-supplied values such as a Google
 /// Cloud project id.
+#[cfg(test)]
 pub fn validate_path_segment(value: &str, what: &str) -> Result<(), ProviderError> {
     let ok = !value.is_empty()
         && value.len() <= 128
@@ -407,12 +400,6 @@ pub fn validate_path_segment(value: &str, what: &str) -> Result<(), ProviderErro
             "{what} contains characters that are not allowed"
         )))
     }
-}
-
-/// Status codes that should be surfaced verbatim by adapters wanting to
-/// override the default table (e.g. Codex's revoked-token 401 body).
-pub fn is_status(status: &StatusCode, code: u16) -> bool {
-    status.as_u16() == code
 }
 
 #[cfg(test)]

@@ -2,6 +2,13 @@
 
 All notable changes to EyeUrAI are documented in this file.
 
+## 1.1.0 — 2026-08-10
+
+- Add isolated Codex profiles so multiple personal and work accounts can remain signed in simultaneously.
+- Use the official Codex app-server browser flow to own login, credential persistence, and refresh-token rotation inside each profile.
+- Preserve non-secret last-known quota snapshots when terminal logins change while keeping profile credentials isolated.
+- Publish Apple silicon and Intel macOS builds, a Windows x64 installer, and signed automatic-update artifacts.
+
 ## 1.0.0 — 2026-08-09
 
 - Monitor Claude, OpenAI/Codex, OpenRouter, and Gemini connection states from a compact desktop popover.

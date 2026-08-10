@@ -37,6 +37,7 @@ impl Secret {
     }
 
     /// Byte length. Safe to log — it reveals nothing beyond magnitude.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -46,6 +47,7 @@ impl Secret {
     /// Shows at most the first 6 and last 4 characters, and only when the
     /// secret is long enough that those fragments cannot reconstruct it
     /// (>= 16 chars). Shorter secrets are fully masked.
+    #[cfg(test)]
     pub fn masked_hint(&self) -> String {
         let chars: Vec<char> = self.0.chars().collect();
         if chars.len() < 16 {

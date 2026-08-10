@@ -54,6 +54,9 @@ jobs:
       - name: Test Rust core
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Lint Rust core
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - name: Build and publish signed release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -63,7 +66,6 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: EyeUrAI v__VERSION__
-          releaseBody: Download the installer for your platform below. Existing EyeUrAI installations will offer this update automatically.
           releaseDraft: false
           prerelease: false
           generateReleaseNotes: true

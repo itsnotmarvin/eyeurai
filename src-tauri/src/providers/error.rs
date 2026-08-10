@@ -271,26 +271,22 @@ fn match_bearer(chars: &[char], i: usize) -> Option<usize> {
 }
 
 fn starts_with(chars: &[char], i: usize, needle: &str) -> bool {
-    let mut idx = i;
-    for c in needle.chars() {
+    for (idx, c) in (i..).zip(needle.chars()) {
         if idx >= chars.len() || chars[idx] != c {
             return false;
         }
-        idx += 1;
     }
     true
 }
 
 fn starts_with_ignore_case(chars: &[char], i: usize, needle: &str) -> bool {
-    let mut idx = i;
-    for c in needle.chars() {
+    for (idx, c) in (i..).zip(needle.chars()) {
         if idx >= chars.len() {
             return false;
         }
-        if chars[idx].to_ascii_lowercase() != c.to_ascii_lowercase() {
+        if !chars[idx].eq_ignore_ascii_case(&c) {
             return false;
         }
-        idx += 1;
     }
     true
 }

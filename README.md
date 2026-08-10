@@ -8,7 +8,16 @@ EyeUrAI is an open-source, local-first menu-bar and system-tray app for monitori
 
 ## Installation
 
-EyeUrAI is currently installed from source. You will need:
+Download the latest installer from [GitHub Releases](https://github.com/itsnotmarvin/eyeurai/releases/latest):
+
+- macOS 11 or newer: choose the Apple silicon (`aarch64`) or Intel (`x64`) DMG.
+- Windows x64: choose the `x64-setup.exe` installer.
+
+The current macOS builds use ad-hoc code signing, so macOS may require approval in Privacy & Security after download. The Windows installer is not yet Authenticode-signed and may show a Microsoft Defender SmartScreen warning. Tauri updater artifacts are signed separately so installed copies can verify automatic updates.
+
+### Install from source
+
+To build EyeUrAI yourself, you will need:
 
 - macOS or Windows
 - [Git](https://git-scm.com/downloads)
@@ -40,7 +49,7 @@ npm run desktop:build
 
 Tauri places the platform installer and app bundle under `src-tauri/target/release/bundle/`. On macOS, open the generated DMG and drag EyeUrAI into Applications. On Windows, run the generated installer.
 
-Development builds started with `npm run desktop:dev` do not check for updates. After the first signed public release, install EyeUrAI from GitHub Releases once; that version will show an **Update available** button for later releases.
+Development builds started with `npm run desktop:dev` do not check for updates. Install EyeUrAI from GitHub Releases once; that version will show an **Update available** button for later releases.
 
 ### Provider sign-in
 
@@ -98,7 +107,7 @@ EyeUrAI does not launch at login. After restarting your computer, open EyeUrAI n
 
 Release builds and source archives are available from [GitHub Releases](https://github.com/itsnotmarvin/eyeurai/releases/latest).
 
-The 1.0.0 prebuilt app is for Apple silicon Macs and is currently unsigned. Windows is supported from source; a signed Windows installer is not included in this release.
+The current release includes DMGs for Apple silicon and Intel Macs plus an x64 Windows installer. macOS 11 or newer is required. Platform signing status and any expected operating-system warnings are documented in the installation section above.
 
 ## Connecting providers
 
@@ -158,18 +167,18 @@ Losing this key prevents new updates from being installed by existing users. The
 For each release, choose a version greater than the currently published version. The preparation command updates `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` together:
 
 ```sh
-npm run release:prepare -- 1.0.1
+npm run release:prepare -- 1.1.1
 npm run release:check
 npm test
 npm run build
 
 git add .
-git commit -m "Release EyeUrAI 1.0.1"
-git tag v1.0.1
+git commit -m "Release EyeUrAI 1.1.1"
+git tag v1.1.1
 git push origin main --follow-tags
 ```
 
-Pushing the `v1.0.1` tag runs `.github/workflows/release.yml`. GitHub Actions tests the project, builds macOS Apple Silicon, macOS Intel, and Windows installers, signs the updater artifacts, publishes the GitHub Release, and generates `latest.json`. Installed copies then discover the release automatically.
+Pushing the `v1.1.1` tag runs `.github/workflows/release.yml`. GitHub Actions tests the project, builds macOS Apple Silicon, macOS Intel, and Windows installers, signs the updater artifacts, publishes the GitHub Release, and generates `latest.json`. Installed copies then discover the release automatically.
 
 The current macOS builds use ad-hoc code signing so the open-source release pipeline can run without private Apple credentials. Before distributing broadly, Apple Developer signing and notarization are recommended to remove Gatekeeper friction. Updater signing and Apple signing are separate protections.
 

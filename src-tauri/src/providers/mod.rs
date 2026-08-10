@@ -125,8 +125,6 @@ pub struct ProviderContext {
     pub clock: Clock,
     /// Wall-clock budget for one provider across all of its accounts.
     pub provider_budget: Duration,
-    /// Age at which cached data is flagged stale in [`crate::models::Freshness`].
-    pub stale_after_seconds: i64,
 }
 
 impl ProviderContext {
@@ -137,18 +135,7 @@ impl ProviderContext {
             user_agents: UserAgents::default(),
             clock: system_clock(),
             provider_budget: http::DEFAULT_PROVIDER_BUDGET,
-            stale_after_seconds: 300,
         })
-    }
-
-    pub fn with_credentials(mut self, resolver: Arc<dyn CredentialResolver>) -> Self {
-        self.credentials = resolver;
-        self
-    }
-
-    pub fn with_clock(mut self, clock: Clock) -> Self {
-        self.clock = clock;
-        self
     }
 
     pub fn now(&self) -> DateTime<Utc> {
@@ -201,6 +188,7 @@ impl ProviderRegistry {
         }
     }
 
+    #[cfg(test)]
     pub fn from_providers(providers: Vec<Arc<dyn QuotaProvider>>) -> Self {
         ProviderRegistry { providers }
     }
@@ -394,7 +382,6 @@ mod tests {
                 Utc.timestamp_opt(1_700_000_000, 0).single().expect("valid")
             }),
             provider_budget: Duration::from_millis(100),
-            stale_after_seconds: 300,
         })
     }
 
