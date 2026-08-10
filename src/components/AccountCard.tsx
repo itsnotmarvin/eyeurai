@@ -27,7 +27,8 @@ const STATUS_LABEL: Record<Account["status"], string> = {
 function isRetainedCliAccount(account: Account): boolean {
   return (
     (account.provider === "claude" || account.provider === "openai") &&
-    account.isCliActive === false
+    account.isCliActive === false &&
+    account.status !== "fresh"
   );
 }
 

@@ -272,8 +272,10 @@ pub fn parse_profile(value: &Value) -> ClaudeProfile {
 }
 
 /// Claude's profile UUID is preferred; normalized email is a stable fallback
-/// for profile variants that omit the UUID. The fixed credential slot is only
-/// used when the best-effort profile call yielded no principal information.
+/// for response variants that omit the UUID. Distinct workspace principals
+/// can share an email address, so email must not merge UUID-backed accounts.
+/// The fixed credential slot is used only when the best-effort profile call
+/// yielded no principal information and is never persisted by the registry.
 fn stable_account_id(descriptor: &AccountDescriptor, profile: Option<&ClaudeProfile>) -> String {
     profile
         .and_then(|profile| {
@@ -644,6 +646,16 @@ mod tests {
         );
         assert_eq!(email_id, normalized_email_id);
         assert_ne!(uuid_id, email_id);
+
+        let uuid_only_id = stable_account_id(
+            &descriptor,
+            Some(&ClaudeProfile {
+                account_id: Some("user-uuid".to_string()),
+                ..ClaudeProfile::default()
+            }),
+        );
+        assert_eq!(uuid_only_id, uuid_id);
+        assert_ne!(uuid_only_id, email_id);
         assert_eq!(stable_account_id(&descriptor, None), "claude-cli");
     }
 

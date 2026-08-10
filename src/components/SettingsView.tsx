@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   PROVIDER_META,
@@ -11,6 +11,11 @@ import {
 import { reconcileThresholds } from "../lib/preferences";
 import { displayPercent, menuBarQuotaLabel } from "../lib/format";
 import { ensureNotificationPermission } from "../lib/notify";
+import {
+  startCodexAccountLogin,
+  subscribeToCodexLogin,
+  type CodexLoginEvent,
+} from "../lib/ipc";
 import { ProviderMark } from "./ProviderMark";
 import { Switch } from "./controls/Switch";
 import { ThresholdSlider } from "./controls/ThresholdSlider";
@@ -48,9 +53,8 @@ const CONNECTION_COPY: Record<
   },
   openai: {
     title: "Connect OpenAI / Codex",
-    body: "Run Codex sign-in in a terminal, then check again. EyeUrAI observes whichever OpenAI account that CLI currently uses.",
-    command: "codex login",
-    note: "Previously retained account identities stay listed when the terminal login changes. OpenAI controls whether separate CLI logins can coexist.",
+    body: "EyeUrAI creates a separate Codex profile and opens OpenAI's official browser sign-in. Each profile stays independently connected, so adding another account does not replace this one.",
+    note: "Codex owns the OAuth flow, credential files, and token refresh inside each isolated profile. EyeUrAI only reads account and rate-limit metadata from the official Codex app-server.",
   },
   openrouter: {
     title: "Connect OpenRouter",
@@ -72,6 +76,10 @@ function sourceLabel(account: Account): string {
 
 function accountSourceLabel(account: Account): string {
   const plan = account.plan ? ` · ${account.plan}` : "";
+  if (account.provider === "openai" && account.id.startsWith("codex-profile:")) {
+    const state = account.status === "fresh" ? "Live" : "Last read unavailable";
+    return `Connected Codex profile · ${state}${plan}`;
+  }
   if (account.provider === "claude" || account.provider === "openai") {
     if (account.isCliActive === true) return `Current terminal login${plan}`;
     if (account.isCliActive === false) return `Retained account · Last known data${plan}`;
@@ -95,6 +103,20 @@ export function SettingsView({
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectProvider, setConnectProvider] = useState<ProviderId | null>(null);
+  const [codexLogin, setCodexLogin] = useState<{
+    status: "idle" | "starting" | "waiting" | "success" | "error";
+    profileId?: string;
+    message?: string;
+  }>({ status: "idle" });
+  const codexLoginAttemptId = useRef(0);
+  const codexLoginMounted = useRef(true);
+  const codexLoginAttempt = useRef<{
+    id: number;
+    profileId?: string;
+    pendingEvents: Map<string, CodexLoginEvent>;
+  } | null>(null);
+  const codexLoginListener = useRef<((event: CodexLoginEvent) => void) | null>(null);
+  const codexLoginSubscription = useRef<Promise<() => void> | null>(null);
   const askForPermission = requestPermission ?? ensureNotificationPermission;
   const connectedAccounts = accounts.filter((account) => !/-status-\d+$/.test(account.id));
   const pinnedAccount = preferences.pinnedQuota
@@ -108,6 +130,104 @@ export function SettingsView({
     : preferences.pinnedQuota
       ? "Unavailable"
       : null;
+
+  function completeCodexLogin(
+    attempt: NonNullable<typeof codexLoginAttempt.current>,
+    event: CodexLoginEvent,
+  ): void {
+    if (codexLoginAttempt.current?.id !== attempt.id || attempt.profileId !== event.profileId) {
+      return;
+    }
+    codexLoginAttempt.current = null;
+    setCodexLogin(
+      event.success
+        ? { status: "success", profileId: event.profileId }
+        : {
+            status: "error",
+            profileId: event.profileId,
+            message: event.message ?? "Codex sign-in was not completed.",
+          },
+    );
+    if (event.success) onRefreshAccounts();
+  }
+
+  codexLoginListener.current = (event) => {
+    if (!codexLoginMounted.current) return;
+    const attempt = codexLoginAttempt.current;
+    if (!attempt) return;
+    if (!attempt.profileId) {
+      // A completion can beat the start command's response. Keep a small,
+      // profile-keyed buffer until that response provides the correlation ID.
+      attempt.pendingEvents.set(event.profileId, event);
+      if (attempt.pendingEvents.size > 16) {
+        const oldestProfileId = attempt.pendingEvents.keys().next().value;
+        if (oldestProfileId !== undefined) attempt.pendingEvents.delete(oldestProfileId);
+      }
+      return;
+    }
+    completeCodexLogin(attempt, event);
+  };
+
+  function ensureCodexLoginSubscription(): Promise<() => void> {
+    if (!codexLoginSubscription.current) {
+      codexLoginSubscription.current = subscribeToCodexLogin((event) => {
+        codexLoginListener.current?.(event);
+      });
+    }
+    return codexLoginSubscription.current;
+  }
+
+  useEffect(() => {
+    codexLoginMounted.current = true;
+    const subscription = ensureCodexLoginSubscription();
+    return () => {
+      codexLoginMounted.current = false;
+      codexLoginAttempt.current = null;
+      if (codexLoginSubscription.current === subscription) {
+        codexLoginSubscription.current = null;
+      }
+      void subscription.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  async function beginCodexLogin(): Promise<void> {
+    const attempt: NonNullable<typeof codexLoginAttempt.current> = {
+      id: ++codexLoginAttemptId.current,
+      pendingEvents: new Map<string, CodexLoginEvent>(),
+    };
+    codexLoginAttempt.current = attempt;
+    setCodexLogin({ status: "starting" });
+    try {
+      // Do not open the browser flow until its completion listener is active.
+      await ensureCodexLoginSubscription();
+      if (codexLoginAttempt.current?.id !== attempt.id) return;
+      const started = await startCodexAccountLogin();
+      if (codexLoginAttempt.current?.id !== attempt.id) return;
+      if (!started) {
+        codexLoginAttempt.current = null;
+        setCodexLogin({
+          status: "error",
+          message: "Codex account sign-in is available in the installed EyeUrAI app.",
+        });
+        return;
+      }
+      attempt.profileId = started.profileId;
+      const earlyCompletion = attempt.pendingEvents.get(started.profileId);
+      attempt.pendingEvents.clear();
+      if (earlyCompletion) {
+        completeCodexLogin(attempt, earlyCompletion);
+      } else {
+        setCodexLogin({ status: "waiting", profileId: started.profileId });
+      }
+    } catch (cause) {
+      if (codexLoginAttempt.current?.id !== attempt.id) return;
+      codexLoginAttempt.current = null;
+      setCodexLogin({
+        status: "error",
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
 
   function toggleProvider(provider: ProviderId, enabled: boolean): void {
     const next = enabled
@@ -140,6 +260,7 @@ export function SettingsView({
             className="btn btn--ghost btn--mini"
             onClick={() => {
               setConnectProvider(null);
+              setCodexLogin({ status: "idle" });
               setConnectOpen(true);
             }}
           >
@@ -199,8 +320,8 @@ export function SettingsView({
           ) : null}
         </div>
         <p className="settings__privacy">
-          Disconnect stops EyeUrAI from reading the account. It does not log you out of the
-          provider or delete shared Claude/Codex credentials.
+          Disconnect hides retained quota data for that recognized account from EyeUrAI views and
+          alerts. It does not log you out or delete provider credentials.
         </p>
       </section>
 
@@ -351,8 +472,8 @@ export function SettingsView({
                 </h2>
                 <p className="connectsheet__subtitle">
                   {connectProvider
-                    ? "EyeUrAI retains non-secret identity details; credentials stay in provider or operating-system storage."
-                    : "Choose a provider to check an existing sign-in. EyeUrAI does not create or switch provider logins."}
+                    ? "EyeUrAI retains non-secret identity details; credentials stay in provider-managed or operating-system storage."
+                    : "Choose a provider. OpenAI can add an isolated Codex account; other providers check their existing sign-ins."}
                 </p>
               </div>
               <button
@@ -379,6 +500,20 @@ export function SettingsView({
                 {CONNECTION_COPY[connectProvider].note ? (
                   <p className="connectsheet__note">{CONNECTION_COPY[connectProvider].note}</p>
                 ) : null}
+                {connectProvider === "openai" && codexLogin.status !== "idle" ? (
+                  <p
+                    className="connectsheet__note"
+                    role={codexLogin.status === "error" ? "alert" : "status"}
+                  >
+                    {codexLogin.status === "starting"
+                      ? "Starting the Codex sign-in service…"
+                      : codexLogin.status === "waiting"
+                        ? "Your browser is open. Finish signing into the Codex account there."
+                        : codexLogin.status === "success"
+                          ? "Codex account added. Its usage can now refresh independently."
+                          : codexLogin.message}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <div className="connectsheet__providers">
@@ -388,7 +523,10 @@ export function SettingsView({
                     className="connectsheet__provider"
                     data-provider={provider}
                     key={provider}
-                    onClick={() => setConnectProvider(provider)}
+                    onClick={() => {
+                      setConnectProvider(provider);
+                      if (provider === "openai") setCodexLogin({ status: "idle" });
+                    }}
                   >
                     <span className="connectsheet__mark">
                       <ProviderMark provider={provider} size={18} />
@@ -410,16 +548,41 @@ export function SettingsView({
                   Back
                 </button>
               ) : null}
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => {
-                  onRefreshAccounts();
-                  setConnectOpen(false);
-                }}
-              >
-                Check again
-              </button>
+              {connectProvider === "openai" ? (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={codexLogin.status === "starting" || codexLogin.status === "waiting"}
+                  onClick={() => {
+                    if (codexLogin.status === "success") {
+                      setConnectOpen(false);
+                    } else {
+                      void beginCodexLogin();
+                    }
+                  }}
+                >
+                  {codexLogin.status === "starting"
+                    ? "Starting…"
+                    : codexLogin.status === "waiting"
+                      ? "Waiting for browser…"
+                      : codexLogin.status === "success"
+                        ? "Done"
+                        : codexLogin.status === "error"
+                          ? "Try again"
+                          : "Add Codex account"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => {
+                    onRefreshAccounts();
+                    setConnectOpen(false);
+                  }}
+                >
+                  Check again
+                </button>
+              )}
             </div>
           </div>
         </div>

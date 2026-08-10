@@ -65,7 +65,12 @@ export function App() {
   const [localUsageLoading, setLocalUsageLoading] = useState(false);
   const [localUsageError, setLocalUsageError] = useState<string | null>(null);
   const [usageConsentOpen, setUsageConsentOpen] = useState(false);
-  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(
+    () =>
+      import.meta.env.DEV &&
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).has("preview-update"),
+  );
   const alertState = useRef<AlertState>({});
   const scrollRef = useRef<HTMLElement | null>(null);
 
@@ -98,7 +103,7 @@ export function App() {
     if (!pinned || !monitoredSnapshot) return null;
     const account = monitoredSnapshot.accounts.find((candidate) => candidate.id === pinned.accountId);
     const window = account?.windows.find((candidate) => candidate.id === pinned.windowId);
-    return account && window
+    return account && window && account.status === "fresh"
       ? { account, window, windowLabel: menuBarQuotaLabel(window) }
       : null;
   }, [monitoredSnapshot, preferences.pinnedQuota]);

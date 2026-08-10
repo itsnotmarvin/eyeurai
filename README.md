@@ -48,7 +48,8 @@ EyeUrAI reuses provider credentials that already exist on your computer. It does
 
 ```sh
 # OpenAI / Codex
-codex login
+# Add accounts from EyeUrAI Settings → Add account. EyeUrAI opens the
+# official Codex browser flow in a separate profile for each account.
 
 # Anthropic / Claude
 claude auth login
@@ -106,13 +107,13 @@ This first implementation reuses credentials that already exist on your computer
 | Provider | Current connection | What EyeUrAI can show |
 | --- | --- | --- |
 | Claude | The OAuth login written by Claude Code | Five-hour, weekly, and model-specific percentages and resets |
-| OpenAI / Codex | The ChatGPT subscription login in `~/.codex/auth.json` | Primary/secondary subscription windows, named by their actual duration |
+| OpenAI / Codex | The existing `~/.codex` login plus isolated profiles added in EyeUrAI | Independently refreshed primary/secondary subscription windows for multiple accounts |
 | OpenRouter | `OPENROUTER_API_KEY` or `OPENROUTER_KEY` when EyeUrAI is launched | The documented current-key USD spend ceiling and reset cadence |
 | Gemini | Google project configuration is detected when available | A clear unavailable state; Google currently directs users to AI Studio for active rate limits and does not expose the account-wide percentage this app needs |
 
-Claude and Codex use read-only first-party endpoints also used by their official clients, but those routes are not documented public APIs and may change. OpenRouter uses its documented current-key API. EyeUrAI never refreshes or rewrites a provider login.
+Claude and the default Codex connection use read-only first-party endpoints also used by their official clients, but those routes are not documented public APIs and may change. OpenRouter uses its documented current-key API. EyeUrAI never refreshes or rewrites the default terminal login. Codex accounts added inside EyeUrAI use the official Codex app-server, which owns browser login, credential persistence, and refresh-token rotation inside a separate `CODEX_HOME` for each account.
 
-The data model and UI support multiple accounts. Automatic discovery assigns the active Claude and Codex login a stable, pseudonymous account ID and retains each account's last successful quota snapshot when the terminal switches to another login. Retained snapshots are clearly marked as last-known data: EyeUrAI does not copy or race the CLI's rotating refresh token, so only the currently available CLI login can be refreshed live. Provider-owned isolated logins are the next connection milestone.
+The data model and UI support accounts from multiple providers at the same time. Automatic discovery assigns Claude and Codex logins stable, pseudonymous account IDs and retains the last successful quota snapshot when a terminal login changes. Codex accounts added through EyeUrAI each have an isolated provider-owned profile, so multiple Codex accounts can stay signed in and refresh live without copying credentials between them. Retained snapshots are clearly marked as last-known data.
 
 ## Development
 

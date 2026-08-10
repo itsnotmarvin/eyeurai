@@ -11,8 +11,20 @@ export interface PreferencesController {
   replace: (next: Preferences) => void;
 }
 
+function loadInitialPreferences(): Preferences {
+  const preferences = loadPreferences();
+  if (
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("preview-update")
+  ) {
+    return { ...preferences, onboardingCompleted: true };
+  }
+  return preferences;
+}
+
 export function usePreferences(): PreferencesController {
-  const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
+  const [preferences, setPreferences] = useState<Preferences>(loadInitialPreferences);
   const firstRun = useRef(true);
 
   useEffect(() => {

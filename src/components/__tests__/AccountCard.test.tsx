@@ -101,11 +101,11 @@ describe("AccountCard", () => {
     expect(screen.getByText("Saved from the previous terminal login.")).toBeInTheDocument();
   });
 
-  it("labels a recently retained CLI observation as cached", () => {
+  it("keeps an independently connected CLI profile live even when it is not primary", () => {
     renderCard(makeAccount({ source: "cli", isCliActive: false }));
 
-    expect(screen.getByText("Cached")).toBeInTheDocument();
-    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    expect(screen.getByText("Live")).toBeInTheDocument();
+    expect(screen.queryByText("Cached")).not.toBeInTheDocument();
   });
 
   it("offers a retry action on error accounts", () => {

@@ -112,6 +112,30 @@ impl AccountSnapshotRegistry {
                 .accounts
                 .retain(|account| !excluded_account_ids.contains(&account.account_id));
 
+            // Early isolated-Codex builds keyed managed profiles by an email
+            // hash (`codex:<hash>`). The durable profile ID is now the source
+            // of truth so failures and disconnects keep the same identity.
+            // Migrate a matching legacy row once its managed profile is read.
+            if provider.provider == ProviderId::Codex {
+                let managed_labels: BTreeSet<String> = provider
+                    .accounts
+                    .iter()
+                    .filter(|account| {
+                        account.account_id.starts_with("codex-profile:")
+                            && account.status == ProviderStatus::Ok
+                    })
+                    .map(|account| account.label.to_ascii_lowercase())
+                    .collect();
+                let before = self.accounts.len();
+                self.accounts
+                    .retain(|(stored_provider, account_id), account| {
+                        !(*stored_provider == ProviderId::Codex
+                            && account_id.starts_with("codex:")
+                            && managed_labels.contains(&account.label.to_ascii_lowercase()))
+                    });
+                changed |= self.accounts.len() != before;
+            }
+
             let observed_ids: BTreeSet<String> = provider
                 .accounts
                 .iter()
@@ -257,7 +281,7 @@ fn stale_copy(
                 "This account is not the current Claude Code login. Its last successful quota snapshot is retained but cannot be refreshed independently."
             }
             ProviderId::Codex => {
-                "This account is not the current Codex CLI login. Its last successful quota snapshot is retained but isolated per-account refresh is not available yet."
+                "This account is not available through a connected Codex profile. Its last successful quota snapshot is retained but cannot be refreshed until it is connected again."
             }
             _ => {
                 "This account is no longer available through its configured credential. Its last successful quota snapshot is retained."
@@ -629,6 +653,45 @@ mod tests {
         assert_eq!(
             account.error.as_ref().map(|error| error.message.as_str()),
             Some("provider timed out")
+        );
+    }
+
+    #[test]
+    fn legacy_codex_email_identity_migrates_to_durable_profile_identity() {
+        let directory = TestDirectory::new("codex-profile-migration");
+        let mut registry = AccountSnapshotRegistry::load(&directory.0).expect("load empty");
+        let excluded = BTreeSet::new();
+
+        let mut legacy = live_snapshot(
+            ProviderId::Codex,
+            "codex:legacy-email-hash",
+            "dev@example.com",
+            42.0,
+            ts(6_000),
+        );
+        registry
+            .reconcile(&mut legacy, &excluded)
+            .expect("persist legacy identity");
+
+        let mut managed = live_snapshot(
+            ProviderId::Codex,
+            "codex-profile:profile-second",
+            "dev@example.com",
+            43.0,
+            ts(6_100),
+        );
+        registry
+            .reconcile(&mut managed, &excluded)
+            .expect("migrate managed profile");
+
+        assert_eq!(managed.providers[0].accounts.len(), 1);
+        assert_eq!(
+            managed.providers[0].accounts[0].account_id,
+            "codex-profile:profile-second"
+        );
+        assert_eq!(
+            managed.providers[0].accounts[0].windows[0].used_percent,
+            Some(43.0)
         );
     }
 }

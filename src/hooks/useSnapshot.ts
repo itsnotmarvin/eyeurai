@@ -41,12 +41,15 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
 
   const mounted = useRef(true);
   const inFlight = useRef(false);
+  const queuedLoad = useRef<{ manual: boolean } | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
+  const loadRef = useRef<(options: { manual: boolean }) => Promise<void>>(async () => {});
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      queuedLoad.current = null;
     };
   }, []);
 
@@ -60,7 +63,14 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
 
   const load = useCallback(
     async (options: { manual: boolean }) => {
-      if (inFlight.current) return;
+      if (inFlight.current) {
+        // Coalesce overlapping requests into one follow-up load. A manual
+        // refresh takes precedence so it is never swallowed by a poll.
+        queuedLoad.current = {
+          manual: options.manual || queuedLoad.current?.manual === true,
+        };
+        return;
+      }
       inFlight.current = true;
       if (options.manual && mounted.current) setRefreshing(true);
 
@@ -95,11 +105,15 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
         setPhase(snapshotRef.current ? "ready" : "error");
       } finally {
         inFlight.current = false;
-        if (mounted.current) setRefreshing(false);
+        const queued = queuedLoad.current;
+        queuedLoad.current = null;
+        if (mounted.current && !queued?.manual) setRefreshing(false);
+        if (mounted.current && queued) void loadRef.current(queued);
       }
     },
     [apply, exclusionsKey, live],
   );
+  loadRef.current = load;
 
   useEffect(() => {
     void load({ manual: false });

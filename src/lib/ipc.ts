@@ -23,9 +23,21 @@ const SNAPSHOT_EVENTS = ["snapshot-updated", "quota://snapshot"] as const;
 const REFRESH_REQUEST_EVENT = "eyeurai://refresh-requested";
 const LOCAL_USAGE_COMMANDS = ["scan_local_usage"] as const;
 const TRAY_DISPLAY_COMMANDS = ["set_tray_display"] as const;
+const START_CODEX_LOGIN_COMMANDS = ["start_codex_account_login"] as const;
+const CODEX_LOGIN_EVENT = "eyeurai://codex-profile-login";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
+
+export interface CodexLoginStarted {
+  profileId: string;
+}
+
+export interface CodexLoginEvent {
+  profileId: string;
+  success: boolean;
+  message?: string;
+}
 
 let invokeCache: InvokeFn | null | undefined;
 const resolvedCommand = new Map<string, string>();
@@ -94,6 +106,36 @@ export async function requestRefresh(
   });
   if (raw === null || raw === undefined) return null;
   return normalizeSnapshot(raw);
+}
+
+/** Starts an official Codex browser login in a new isolated CODEX_HOME. */
+export async function startCodexAccountLogin(): Promise<CodexLoginStarted | null> {
+  return await invokeAny<CodexLoginStarted>(
+    "codex-login-start",
+    START_CODEX_LOGIN_COMMANDS,
+  );
+}
+
+/** Watches the provider-owned Codex browser flow for completion. */
+export async function subscribeToCodexLogin(
+  onEvent: (event: CodexLoginEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    return await listen<CodexLoginEvent>(CODEX_LOGIN_EVENT, (message) => {
+      const payload = message.payload;
+      if (
+        payload &&
+        typeof payload.profileId === "string" &&
+        typeof payload.success === "boolean"
+      ) {
+        onEvent(payload);
+      }
+    });
+  } catch {
+    return () => {};
+  }
 }
 
 function safeCount(value: unknown): number {

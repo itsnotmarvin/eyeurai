@@ -2,10 +2,11 @@
 //!
 //! # Data source
 //!
-//! `GET https://chatgpt.com/backend-api/wham/usage` with the OAuth access token
-//! `codex login` stored in `~/.codex/auth.json`. This is the route the Codex
-//! CLI itself uses to render `/status`; like Claude's, it is a first-party
-//! endpoint, not a documented public API.
+//! The default terminal login is read through the first-party usage route with
+//! the OAuth access token stored in `~/.codex/auth.json`. Accounts added in
+//! EyeUrAI are instead read through the official Codex app-server's
+//! `account/read` and `account/rateLimits/read` methods, one isolated
+//! `CODEX_HOME` per account.
 //!
 //! # Window naming
 //!
@@ -22,9 +23,11 @@
 //! `https://api.openai.com/auth` claim block (plan type). Signatures are not
 //! verified — see [`super::jwt`] for why that is correct here.
 //!
-//! As with Claude, this adapter never refreshes tokens: the Codex CLI rotates
-//! refresh tokens, so a monitor that refreshed would break the user's session.
+//! EyeUrAI never refreshes the default CLI token. For isolated profiles, the
+//! Codex app-server owns persistence and token rotation inside that profile.
 
+use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -40,6 +43,7 @@ use super::credentials::AccountHint;
 use super::error::ProviderError;
 use super::http::JsonRequest;
 use super::{not_configured, BoxFuture, ProviderContext, QuotaProvider};
+use crate::codex_profiles;
 
 const USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 const USAGE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -68,9 +72,8 @@ impl CodexProvider {
             provider: ProviderId::Codex,
             display_name: ProviderId::Codex.display_name().to_string(),
             level: CapabilityLevel::Full,
-            data_source:
-                "ChatGPT usage endpoint, using the login the Codex CLI already stored in ~/.codex/auth.json"
-                    .to_string(),
+            data_source: "Existing Codex CLI login plus official Codex app-server profiles"
+                .to_string(),
             official_api: false,
             read_only: true,
             supports_multiple_accounts: true,
@@ -84,7 +87,10 @@ impl CodexProvider {
                     .to_string(),
                 "This is a first-party endpoint, not a documented public API, so the reported windows can change."
                     .to_string(),
-                "EyeUrAI never refreshes or rewrites ~/.codex/auth.json.".to_string(),
+                "EyeUrAI never refreshes or rewrites the default ~/.codex/auth.json login."
+                    .to_string(),
+                "Accounts added in EyeUrAI use isolated CODEX_HOME directories managed by the official Codex app-server."
+                    .to_string(),
             ],
             doc_url: None,
         }
@@ -120,6 +126,20 @@ impl QuotaProvider for CodexProvider {
             for (index, descriptor) in accounts.iter().enumerate() {
                 results.push(fetch_one(ctx, descriptor, index == 0).await);
             }
+            // A user may add the same account that their default terminal
+            // happens to use. Prefer the independently managed profile in
+            // that case, while retaining every distinct managed profile.
+            let managed_labels: BTreeSet<String> = results
+                .iter()
+                .filter(|account| account.account_id.starts_with("codex-profile:"))
+                .map(|account| account.label.to_ascii_lowercase())
+                .collect();
+            results.retain(|account| {
+                account.account_id.starts_with("codex-profile:")
+                    || !managed_labels.contains(&account.label.to_ascii_lowercase())
+            });
+            let mut observed = BTreeSet::new();
+            results.retain(|account| observed.insert(account.account_id.clone()));
 
             let mut snapshot =
                 ProviderSnapshot::new(CodexProvider::capability_info()).with_accounts(results);
@@ -135,6 +155,10 @@ async fn fetch_one(
     descriptor: &AccountDescriptor,
     is_primary: bool,
 ) -> AccountSnapshot {
+    if let Some(profile_home) = descriptor.option("codex_home") {
+        return fetch_managed_profile(ctx, descriptor, Path::new(profile_home)).await;
+    }
+
     let now = ctx.now();
     let fallback_label = descriptor.fallback_label();
 
@@ -200,6 +224,50 @@ async fn fetch_one(
 
     snapshot.plan = plan;
     snapshot.active = is_primary;
+    snapshot
+}
+
+async fn fetch_managed_profile(
+    ctx: &ProviderContext,
+    descriptor: &AccountDescriptor,
+    profile_home: &Path,
+) -> AccountSnapshot {
+    let now = ctx.now();
+    let managed = match codex_profiles::read_managed_account(profile_home).await {
+        Ok(account) => account,
+        Err(error) => {
+            let mut snapshot = AccountSnapshot::failed(
+                descriptor.id.clone(),
+                descriptor.fallback_label(),
+                error.to_info(),
+            );
+            snapshot.active = true;
+            return snapshot;
+        }
+    };
+
+    // The isolated profile is the durable connection identity. Using an
+    // email-derived ID here made the same connection change IDs whenever an
+    // app-server read failed (the failure path only knows the descriptor),
+    // which produced duplicate stale/error rows and broke disconnect filters.
+    let account_id = descriptor.id.clone();
+    let label = managed
+        .email
+        .clone()
+        .unwrap_or_else(|| descriptor.fallback_label());
+    let mut snapshot = match parse_app_server_rate_limits(&managed.rate_limits, now) {
+        Ok(windows) => {
+            let mut snapshot = AccountSnapshot::new(account_id.clone(), label.clone());
+            snapshot.windows = windows;
+            snapshot.freshness = Freshness::live(now);
+            snapshot
+        }
+        Err(error) => AccountSnapshot::failed(account_id, label, error.to_info()),
+    };
+    snapshot.plan = managed.plan.map(|plan| pretty_plan(&plan));
+    // Isolated profiles remain independently readable even when another Codex
+    // account is added, so they are active rather than historical cache rows.
+    snapshot.active = true;
     snapshot
 }
 
@@ -311,6 +379,43 @@ pub fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<Vec<QuotaWindow>
         return Ok(windows);
     }
 
+    Ok(windows)
+}
+
+/// Parse the supported `account/rateLimits/read` app-server shape used for
+/// EyeUrAI-managed Codex profiles.
+pub fn parse_app_server_rate_limits(
+    value: &Value,
+    now: DateTime<Utc>,
+) -> Result<Vec<QuotaWindow>, ProviderError> {
+    let object = value.as_object().ok_or_else(|| {
+        ProviderError::parse("the Codex app-server rate limits were not an object")
+    })?;
+    let mut windows = Vec::new();
+    for slot in ["primary", "secondary"] {
+        let Some(entry) = object.get(slot).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(used_percent) = entry.get("usedPercent").and_then(Value::as_f64) else {
+            continue;
+        };
+        let window_seconds = entry
+            .get("windowDurationMins")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .saturating_mul(60);
+        let reset_at = entry.get("resetsAt").and_then(Value::as_i64).unwrap_or(0);
+        let mut normalized = serde_json::Map::new();
+        normalized.insert("used_percent".to_string(), Value::from(used_percent));
+        normalized.insert(
+            "limit_window_seconds".to_string(),
+            Value::from(window_seconds),
+        );
+        normalized.insert("reset_at".to_string(), Value::from(reset_at));
+        if let Some(window) = window_from(&normalized, now, "") {
+            push_unique(&mut windows, window);
+        }
+    }
     Ok(windows)
 }
 
@@ -469,6 +574,30 @@ mod tests {
         assert!(windows
             .iter()
             .all(|w| w.resets_at.map(|d| d.timestamp() > 0).unwrap_or(true)));
+    }
+
+    #[test]
+    fn parses_official_app_server_rate_limits_for_isolated_profiles() {
+        let value = serde_json::json!({
+            "primary": {
+                "usedPercent": 28,
+                "windowDurationMins": 300,
+                "resetsAt": 1_700_004_800_i64
+            },
+            "secondary": {
+                "usedPercent": 63,
+                "windowDurationMins": 10_080,
+                "resetsAt": 1_700_432_000_i64
+            },
+            "planType": "plus"
+        });
+        let windows = parse_app_server_rate_limits(&value, now()).expect("parses");
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].key, "five_hour");
+        assert_eq!(windows[0].used_percent, Some(28.0));
+        assert_eq!(windows[0].resets_in_seconds, Some(4_800));
+        assert_eq!(windows[1].key, "seven_day");
+        assert_eq!(windows[1].used_percent, Some(63.0));
     }
 
     #[test]

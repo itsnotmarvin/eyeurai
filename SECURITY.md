@@ -11,6 +11,7 @@ EyeUrAI reads sensitive account metadata, so its security boundary is intentiona
 - Provider access is read-only.
 - Cached snapshots must not contain prompts, responses, files, or code.
 - Retained account snapshots contain only normalized quota metadata, use pseudonymous account IDs, and are stored in owner-only files. OAuth credentials and refresh tokens are never copied into the snapshot registry.
+- Codex accounts added in EyeUrAI use owner-only, isolated `CODEX_HOME` directories. The official Codex app-server performs login and token rotation inside each directory; raw tokens are never returned to the React webview or written to EyeUrAI's snapshot registry.
 
 ## Reporting a vulnerability
 

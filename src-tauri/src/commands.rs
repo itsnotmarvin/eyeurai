@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::account_registry::AccountSnapshotRegistry;
+use crate::codex_profiles::{self, CodexLoginStarted};
 use crate::models::{ProviderCapability, ProviderId, QuotaSnapshot};
 use crate::providers::credentials::default_descriptors;
 use crate::providers::{ProviderContext, ProviderRegistry};
@@ -17,7 +18,7 @@ use crate::providers::{ProviderContext, ProviderRegistry};
 pub struct AppState {
     registry: Arc<ProviderRegistry>,
     context: Arc<ProviderContext>,
-    descriptors: Arc<Vec<crate::models::AccountDescriptor>>,
+    app_data_dir: PathBuf,
     account_registry: RwLock<AccountSnapshotRegistry>,
     cache: RwLock<Option<CachedSnapshot>>,
 }
@@ -32,11 +33,11 @@ impl AppState {
     pub fn new(app_data_dir: PathBuf) -> Result<Self, String> {
         let context = ProviderContext::new().map_err(|error| error.to_string())?;
         let account_registry =
-            AccountSnapshotRegistry::load(app_data_dir).map_err(|error| error.to_string())?;
+            AccountSnapshotRegistry::load(&app_data_dir).map_err(|error| error.to_string())?;
         Ok(Self {
             registry: Arc::new(ProviderRegistry::with_defaults()),
             context: Arc::new(context),
-            descriptors: Arc::new(default_descriptors()),
+            app_data_dir,
             account_registry: RwLock::new(account_registry),
             cache: RwLock::new(None),
         })
@@ -57,11 +58,14 @@ impl AppState {
         only: Option<Vec<ProviderId>>,
         excluded_account_ids: BTreeSet<String>,
     ) -> QuotaSnapshot {
-        let descriptors = self
-            .descriptors
-            .iter()
+        let mut all_descriptors = default_descriptors();
+        match codex_profiles::discover_descriptors(&self.app_data_dir) {
+            Ok(mut profiles) => all_descriptors.append(&mut profiles),
+            Err(error) => eprintln!("EyeUrAI could not discover Codex profiles: {error}"),
+        }
+        let descriptors = all_descriptors
+            .into_iter()
             .filter(|descriptor| !excluded_account_ids.contains(&descriptor.id))
-            .cloned()
             .collect();
         let mut snapshot = self
             .registry
@@ -86,6 +90,19 @@ impl AppState {
         }
         snapshot
     }
+}
+
+/// Start an official Codex browser login in a new, isolated `CODEX_HOME`.
+/// The Codex app-server owns token storage and rotation; EyeUrAI receives only
+/// a non-secret profile identifier and a completion event.
+#[tauri::command]
+pub async fn start_codex_account_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CodexLoginStarted, String> {
+    codex_profiles::start_login(app, &state.app_data_dir)
+        .await
+        .map_err(|error| error.message)
 }
 
 fn normalize_exclusions(values: Vec<String>) -> BTreeSet<String> {
@@ -118,28 +135,6 @@ pub async fn refresh_quotas(
 ) -> Result<QuotaSnapshot, String> {
     let snapshot = state
         .refresh(None, normalize_exclusions(excluded_account_ids))
-        .await;
-    let _ = app.emit("snapshot-updated", &snapshot);
-    Ok(snapshot)
-}
-
-/// Re-read one provider. Useful for a retry button without delaying healthy
-/// providers. The current UI refreshes all rows, but this keeps the command
-/// contract ready for per-provider actions.
-#[tauri::command]
-pub async fn refresh_provider(
-    app: AppHandle,
-    provider: String,
-    excluded_account_ids: Option<Vec<String>>,
-    state: State<'_, AppState>,
-) -> Result<QuotaSnapshot, String> {
-    let provider =
-        ProviderId::parse(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
-    let snapshot = state
-        .refresh(
-            Some(vec![provider]),
-            normalize_exclusions(excluded_account_ids.unwrap_or_default()),
-        )
         .await;
     let _ = app.emit("snapshot-updated", &snapshot);
     Ok(snapshot)

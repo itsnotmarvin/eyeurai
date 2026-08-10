@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App";
@@ -160,6 +160,86 @@ describe("App", () => {
     expect(within(dialog).getByText(/Claude controls whether separate CLI logins/i)).toBeInTheDocument();
   });
 
+  it("adds a Codex account through an isolated provider-owned profile", async () => {
+    let completeLogin: ((event: ipc.CodexLoginEvent) => void) | null = null;
+    vi.spyOn(ipc, "subscribeToCodexLogin").mockImplementation(async (listener) => {
+      completeLogin = listener;
+      return () => {};
+    });
+    const startLogin = vi
+      .spyOn(ipc, "startCodexAccountLogin")
+      .mockResolvedValue({ profileId: "profile-second" });
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add account" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "OpenAI" }));
+    expect(within(dialog).getByText(/separate Codex profile/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Codex account" }));
+
+    await waitFor(() => expect(startLogin).toHaveBeenCalledTimes(1));
+    expect(
+      await within(dialog).findByText(/finish signing into the Codex account/i),
+    ).toBeInTheDocument();
+
+    act(() => {
+      completeLogin?.({ profileId: "some-other-profile", success: true });
+    });
+    expect(within(dialog).getByText(/finish signing into the Codex account/i)).toBeInTheDocument();
+
+    act(() => {
+      completeLogin?.({ profileId: "profile-second", success: true });
+    });
+    expect(
+      await within(dialog).findByText(/usage can now refresh independently/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("correlates an early Codex completion after the listener is ready", async () => {
+    const callOrder: string[] = [];
+    let completeLogin: ((event: ipc.CodexLoginEvent) => void) | null = null;
+    let resolveStart!: (value: ipc.CodexLoginStarted) => void;
+    const startResult = new Promise<ipc.CodexLoginStarted>((resolve) => {
+      resolveStart = resolve;
+    });
+    vi.spyOn(ipc, "subscribeToCodexLogin").mockImplementation(async (listener) => {
+      callOrder.push("listen");
+      completeLogin = listener;
+      return () => {};
+    });
+    vi.spyOn(ipc, "startCodexAccountLogin").mockImplementation(async () => {
+      callOrder.push("start");
+      return await startResult;
+    });
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add account" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "OpenAI" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Codex account" }));
+
+    await waitFor(() => expect(callOrder).toEqual(["listen", "start"]));
+    act(() => {
+      completeLogin?.({ profileId: "unrelated-profile", success: true });
+      completeLogin?.({ profileId: "profile-early", success: true });
+    });
+    expect(within(dialog).getByText(/starting the Codex sign-in service/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStart({ profileId: "profile-early" });
+      await startResult;
+    });
+    expect(
+      await within(dialog).findByText(/usage can now refresh independently/i),
+    ).toBeInTheDocument();
+  });
+
   it("asks before reading local token logs and remembers consent", async () => {
     seedPreferences();
     render(<App />);
@@ -309,4 +389,21 @@ describe("App", () => {
     );
     await waitFor(() => expect(loadPreferences().pinnedQuota).toBeNull());
   });
+
+  it("does not present a retained stale quota as live in the menu bar", async () => {
+    const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
+    seedPreferences({
+      pinnedQuota: { accountId: "claude-team", windowId: "session" },
+    });
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+
+    await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith(null, null));
+    expect(loadPreferences().pinnedQuota).toEqual({
+      accountId: "claude-team",
+      windowId: "session",
+    });
+  });
+
 });
