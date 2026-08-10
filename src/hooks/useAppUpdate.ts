@@ -25,8 +25,18 @@ function errorMessage(error: unknown): string {
     : "The update could not be installed. Please try again.";
 }
 
+function previewUpdate(): AppUpdateInfo | null {
+  if (!import.meta.env.DEV || typeof window === "undefined") return null;
+  if (!new URLSearchParams(window.location.search).has("preview-update")) return null;
+  return {
+    currentVersion: "1.0.0",
+    version: "1.0.1",
+    notes: "Faster quota refreshes\nImproved menu-bar controls\nSigned automatic updates",
+  };
+}
+
 export function useAppUpdate(): AppUpdateState {
-  const [info, setInfo] = useState<AppUpdateInfo | null>(null);
+  const [info, setInfo] = useState<AppUpdateInfo | null>(previewUpdate);
   const [checking, setChecking] = useState(false);
   const [progress, setProgress] = useState<AppUpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);

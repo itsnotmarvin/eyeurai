@@ -9,3 +9,5 @@ src-tauri/target/
 !.env.example
 coverage/
 src-tauri/gen/
+*.key
+*.key.pub

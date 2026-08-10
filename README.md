@@ -22,13 +22,11 @@ EyeUrAI is currently installed from source. You will need:
 Clone the repository, install its dependencies, and launch the desktop app:
 
 ```sh
-git clone https://github.com/YOUR_GITHUB_ACCOUNT/eyeurai.git
+git clone https://github.com/itsnotmarvin/eyeurai.git
 cd eyeurai
 npm install
 npm run desktop:dev
 ```
-
-Replace `YOUR_GITHUB_ACCOUNT` with the account or organization where the public repository is hosted. The final repository URL will be placed here before the first public release.
 
 EyeUrAI opens as an eye icon in the macOS menu bar or Windows system tray. Click the icon to open the quota panel. The terminal process must remain open while running this development build; press `Ctrl+C` in the terminal to stop it.
 
@@ -42,7 +40,7 @@ npm run desktop:build
 
 Tauri places the platform installer and app bundle under `src-tauri/target/release/bundle/`. On macOS, open the generated DMG and drag EyeUrAI into Applications. On Windows, run the generated installer.
 
-These source builds do not update automatically. After the first signed public release, install EyeUrAI from GitHub Releases once; that version will be able to show an **Update available** button for later releases.
+Development builds started with `npm run desktop:dev` do not check for updates. After the first signed public release, install EyeUrAI from GitHub Releases once; that version will show an **Update available** button for later releases.
 
 ### Provider sign-in
 
@@ -57,6 +55,12 @@ claude auth login
 ```
 
 For OpenRouter, launch EyeUrAI from a terminal where `OPENROUTER_API_KEY` or `OPENROUTER_KEY` is set. Gemini usage percentages remain unavailable until Google exposes a supported API for them.
+
+## Updates
+
+Release builds check for signed updates when EyeUrAI starts, when its window regains focus after at least 15 minutes, and every four hours while it is running. When a newer release exists, the header shows **Update available**.
+
+Select that button and choose **Update & restart**. EyeUrAI downloads and verifies the release, closes, installs it, and reopens automatically. Update checks never run in the browser preview or `desktop:dev` development build.
 
 ## What it shows
 
@@ -135,6 +139,38 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+### Publish a release
+
+Releases remain fully open source: the source, workflow, release notes, public verification key, and installers are public. Only the private updater key stays secret.
+
+A private updater key was generated locally at `~/.tauri/eyeurai.key` and added to the GitHub repository as `TAURI_SIGNING_PRIVATE_KEY`. Back up the local key securely. If the secret ever needs to be restored, use this command without printing or committing it:
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY \
+  --repo itsnotmarvin/eyeurai \
+  < ~/.tauri/eyeurai.key
+```
+
+Losing this key prevents new updates from being installed by existing users. The matching public key in `src-tauri/tauri.conf.json` is intentionally public.
+
+For each release, choose a version greater than the currently published version. The preparation command updates `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` together:
+
+```sh
+npm run release:prepare -- 1.0.1
+npm run release:check
+npm test
+npm run build
+
+git add .
+git commit -m "Release EyeUrAI 1.0.1"
+git tag v1.0.1
+git push origin main --follow-tags
+```
+
+Pushing the `v1.0.1` tag runs `.github/workflows/release.yml`. GitHub Actions tests the project, builds macOS Apple Silicon, macOS Intel, and Windows installers, signs the updater artifacts, publishes the GitHub Release, and generates `latest.json`. Installed copies then discover the release automatically.
+
+The current macOS builds use ad-hoc code signing so the open-source release pipeline can run without private Apple credentials. Before distributing broadly, Apple Developer signing and notarization are recommended to remove Gatekeeper friction. Updater signing and Apple signing are separate protections.
 
 ## Architecture
 

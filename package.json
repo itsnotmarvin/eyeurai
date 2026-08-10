@@ -18,6 +18,8 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
+    "release:check": "node scripts/set-version.mjs --check",
+    "release:prepare": "node scripts/set-version.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
