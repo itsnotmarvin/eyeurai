@@ -2,7 +2,7 @@
 
 All notable changes to EyeUrAI are documented in this file.
 
-## Unreleased
+## 1.2.0 — 2026-08-11
 
 - Add isolated Claude accounts: sign in additional claude.ai accounts through Anthropic's official browser flow and watch every account's usage side by side, independent of the terminal login.
 - Request Claude account grants with a read-only scope so tokens EyeUrAI stores can see usage but never run inference; grants are refreshed and rotated inside each owner-only profile.
