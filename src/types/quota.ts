@@ -160,6 +160,8 @@ export interface PinnedQuota {
   windowId: string;
 }
 
+export type RefreshIntervalSeconds = 15 | 30 | 60 | 300;
+
 /** Non-secret UI preferences. Persisted locally; never holds credentials. */
 export interface Preferences {
   version: number;
@@ -178,6 +180,8 @@ export interface Preferences {
   localUsageEnabled: boolean;
   /** Exact account/window selected on Home for the macOS menu bar. */
   pinnedQuota: PinnedQuota | null;
+  /** How often EyeUrAI re-reads live provider limits. */
+  refreshIntervalSeconds: RefreshIntervalSeconds;
 }
 
 /** Severity derived from a percentage and the user's thresholds. */

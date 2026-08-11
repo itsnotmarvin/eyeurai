@@ -38,7 +38,10 @@ function describeError(error: unknown): string {
   return "Could not read quota data.";
 }
 
-export function useSnapshot(excludedAccountIds: readonly string[] = []): SnapshotController {
+export function useSnapshot(
+  excludedAccountIds: readonly string[] = [],
+  autoRefreshIntervalMs: number = AUTO_REFRESH_INTERVAL_MS,
+): SnapshotController {
   const live = isTauri();
   const exclusionsKey = [...excludedAccountIds].sort().join("\u0000");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -127,10 +130,10 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
     void load({ manual: false, liveRefresh: false });
     const interval = setInterval(
       () => void load({ manual: false, liveRefresh: true }),
-      AUTO_REFRESH_INTERVAL_MS,
+      autoRefreshIntervalMs,
     );
     return () => clearInterval(interval);
-  }, [load]);
+  }, [autoRefreshIntervalMs, load]);
 
   useEffect(() => {
     if (!live) return;

@@ -8,7 +8,7 @@ import {
   type Preferences,
   type ProviderId,
 } from "../types/quota";
-import { reconcileThresholds } from "../lib/preferences";
+import { REFRESH_INTERVAL_OPTIONS, reconcileThresholds } from "../lib/preferences";
 import { displayPercent, menuBarQuotaLabel } from "../lib/format";
 import { ensureNotificationPermission } from "../lib/notify";
 import {
@@ -291,6 +291,37 @@ export function SettingsView({
           <p className="settings__privacy">
             Optional and read-only. EyeUrAI asks before scanning local session files.
           </p>
+        </div>
+      </section>
+
+      <section className="settings__section">
+        <h2 className="settings__title">Usage updates</h2>
+        <div className="settings__refreshChoice">
+          <label htmlFor="refresh-interval">
+            <span className="settings__trayLabel">Auto-refresh</span>
+            <span className="settings__trayDescription">
+              Re-check providers and update the pinned menu-bar percentage.
+            </span>
+          </label>
+          <select
+            id="refresh-interval"
+            aria-label="Auto-refresh interval"
+            value={preferences.refreshIntervalSeconds}
+            onChange={(event) => {
+              const selected = REFRESH_INTERVAL_OPTIONS.find(
+                (option) => option.value === Number(event.currentTarget.value),
+              );
+              if (!selected) return;
+              onChange({ ...preferences, refreshIntervalSeconds: selected.value });
+              onRefreshAccounts();
+            }}
+          >
+            {REFRESH_INTERVAL_OPTIONS.map((option) => (
+              <option value={option.value} key={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
       </section>
 

@@ -3,6 +3,7 @@ import {
   type DisconnectedAccount,
   type Preferences,
   type ProviderId,
+  type RefreshIntervalSeconds,
 } from "../types/quota";
 
 /**
@@ -18,6 +19,16 @@ import {
 export const PREFERENCES_KEY = "eyeurai.preferences.v1";
 export const PREFERENCES_VERSION = 1;
 
+export const REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
+  value: RefreshIntervalSeconds;
+  label: string;
+}> = [
+  { value: 15, label: "Near instant · 15 sec" },
+  { value: 30, label: "Every 30 seconds" },
+  { value: 60, label: "Every minute" },
+  { value: 300, label: "Every 5 minutes" },
+];
+
 export const DEFAULT_PREFERENCES: Preferences = {
   version: PREFERENCES_VERSION,
   onboardingCompleted: false,
@@ -29,6 +40,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   disconnectedAccounts: [],
   localUsageEnabled: false,
   pinnedQuota: null,
+  refreshIntervalSeconds: 60,
 };
 
 export const THRESHOLD_MIN = 0;
@@ -87,6 +99,13 @@ function sanitizePinnedQuota(value: unknown): Preferences["pinnedQuota"] {
   return { accountId, windowId };
 }
 
+function sanitizeRefreshInterval(value: unknown): RefreshIntervalSeconds {
+  return (
+    REFRESH_INTERVAL_OPTIONS.find((option) => option.value === value)?.value ??
+    DEFAULT_PREFERENCES.refreshIntervalSeconds
+  );
+}
+
 /** Coerces anything read from storage into a valid `Preferences`. */
 export function sanitizePreferences(raw: unknown): Preferences {
   if (typeof raw !== "object" || raw === null) return { ...DEFAULT_PREFERENCES };
@@ -109,6 +128,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     disconnectedAccounts: sanitizeDisconnectedAccounts(input.disconnectedAccounts),
     localUsageEnabled: input.localUsageEnabled === true,
     pinnedQuota: sanitizePinnedQuota(input.pinnedQuota),
+    refreshIntervalSeconds: sanitizeRefreshInterval(input.refreshIntervalSeconds),
   };
 }
 

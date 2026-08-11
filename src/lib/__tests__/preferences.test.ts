@@ -55,6 +55,13 @@ describe("sanitizePreferences", () => {
     ).toEqual({ accountId: "claude-personal", windowId: "weekly-all" });
   });
 
+  it("accepts only supported automatic refresh intervals", () => {
+    expect(sanitizePreferences({ refreshIntervalSeconds: 15 }).refreshIntervalSeconds).toBe(15);
+    expect(sanitizePreferences({ refreshIntervalSeconds: 300 }).refreshIntervalSeconds).toBe(300);
+    expect(sanitizePreferences({ refreshIntervalSeconds: 1 }).refreshIntervalSeconds).toBe(60);
+    expect(sanitizePreferences({ refreshIntervalSeconds: "15" }).refreshIntervalSeconds).toBe(60);
+  });
+
   it.each([
     undefined,
     "claude-personal::weekly-all",
@@ -168,6 +175,7 @@ describe("storage", () => {
       "notificationsEnabled",
       "onboardingCompleted",
       "pinnedQuota",
+      "refreshIntervalSeconds",
       "version",
       "warnThreshold",
     ]);

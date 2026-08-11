@@ -1969,6 +1969,36 @@ input {
   line-height: 1.4;
 }
 
+.settings__refreshChoice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.settings__refreshChoice label {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings__refreshChoice select {
+  max-width: 150px;
+  padding: 5px 22px 5px 8px;
+  border: 0.5px solid var(--hairline-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 10px;
+}
+
 .settings__trayChoice {
   display: flex;
   align-items: center;

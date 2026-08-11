@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDemoSnapshot } from "../lib/demo";
 import * as ipc from "../lib/ipc";
-import { AUTO_REFRESH_INTERVAL_MS, useSnapshot } from "./useSnapshot";
+import { useSnapshot } from "./useSnapshot";
 
 afterEach(() => {
   cleanup();
@@ -43,6 +43,7 @@ describe("useSnapshot", () => {
   });
 
   it("automatically re-reads live provider usage without showing a manual refresh", async () => {
+    const intervalMs = 15_000;
     vi.useFakeTimers();
     vi.spyOn(ipc, "isTauri").mockReturnValue(true);
     const fetchSnapshot = vi
@@ -50,11 +51,11 @@ describe("useSnapshot", () => {
       .mockResolvedValue(createDemoSnapshot());
     const requestRefresh = vi
       .spyOn(ipc, "requestRefresh")
-      .mockResolvedValue(createDemoSnapshot(Date.now() + AUTO_REFRESH_INTERVAL_MS));
+      .mockResolvedValue(createDemoSnapshot(Date.now() + intervalMs));
     vi.spyOn(ipc, "subscribeToSnapshots").mockResolvedValue(() => {});
     vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
 
-    const { result } = renderHook(() => useSnapshot());
+    const { result } = renderHook(() => useSnapshot([], intervalMs));
     await act(async () => {
       await Promise.resolve();
     });
@@ -63,7 +64,7 @@ describe("useSnapshot", () => {
     expect(requestRefresh).not.toHaveBeenCalled();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AUTO_REFRESH_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(intervalMs);
     });
 
     expect(requestRefresh).toHaveBeenCalledTimes(1);

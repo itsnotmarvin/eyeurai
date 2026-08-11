@@ -57,7 +57,7 @@ export function App() {
     [preferences.disconnectedAccounts],
   );
   const { snapshot, phase, mode, refreshing, error, refresh } =
-    useSnapshot(excludedAccountIds);
+    useSnapshot(excludedAccountIds, preferences.refreshIntervalSeconds * 1_000);
   const now = useNow();
   const [view, setView] = useState<View>("dashboard");
   const [localUsage, setLocalUsage] = useState<LocalUsageSnapshot | null>(null);
