@@ -147,6 +147,27 @@ impl ProviderContext {
     }
 }
 
+/// Collapse duplicate rows when the user adds the same account their
+/// terminal login already uses: the independently managed profile (whose id
+/// starts with `managed_prefix`) wins, every distinct managed profile stays,
+/// and exact account-id duplicates keep their first occurrence.
+pub fn prefer_managed_accounts(
+    results: &mut Vec<crate::models::AccountSnapshot>,
+    managed_prefix: &str,
+) {
+    let managed_labels: std::collections::BTreeSet<String> = results
+        .iter()
+        .filter(|account| account.account_id.starts_with(managed_prefix))
+        .map(|account| account.label.to_ascii_lowercase())
+        .collect();
+    results.retain(|account| {
+        account.account_id.starts_with(managed_prefix)
+            || !managed_labels.contains(&account.label.to_ascii_lowercase())
+    });
+    let mut observed = std::collections::BTreeSet::new();
+    results.retain(|account| observed.insert(account.account_id.clone()));
+}
+
 /// One provider backend.
 ///
 /// `fetch` is total: it never returns `Err`. A failure is expressed inside the
@@ -319,6 +340,36 @@ pub(crate) fn not_configured(
 mod tests {
     use super::*;
     use crate::models::{AccountSnapshot, CapabilityLevel, CredentialKind};
+
+    #[test]
+    fn managed_profiles_win_over_a_cli_row_for_the_same_account() {
+        let mut results = vec![
+            AccountSnapshot::new("claude:abc123", "Dev@Example.com"),
+            AccountSnapshot::new("claude-profile:profile-1", "dev@example.com"),
+            AccountSnapshot::new("claude-profile:profile-2", "work@example.com"),
+            AccountSnapshot::new("claude:def456", "other@example.com"),
+        ];
+        prefer_managed_accounts(&mut results, "claude-profile:");
+        let ids: Vec<&str> = results.iter().map(|a| a.account_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "claude-profile:profile-1",
+                "claude-profile:profile-2",
+                "claude:def456"
+            ]
+        );
+    }
+
+    #[test]
+    fn exact_duplicate_account_ids_keep_their_first_occurrence() {
+        let mut results = vec![
+            AccountSnapshot::new("claude:same", "one@example.com"),
+            AccountSnapshot::new("claude:same", "one@example.com"),
+        ];
+        prefer_managed_accounts(&mut results, "claude-profile:");
+        assert_eq!(results.len(), 1);
+    }
 
     struct StubProvider {
         id: ProviderId,

@@ -165,6 +165,28 @@ impl HttpClient {
         Err(last.unwrap_or_else(|| ProviderError::internal("no attempt was made")))
     }
 
+    /// Perform a JSON POST. POSTs are never retried automatically: the
+    /// callers (OAuth code exchange, refresh-token rotation) are not
+    /// idempotent, and replaying one can invalidate the very grant it
+    /// carries.
+    pub async fn post_json<T: DeserializeOwned>(
+        &self,
+        request: &JsonRequest<'_>,
+        body: &serde_json::Value,
+    ) -> Result<T, ProviderError> {
+        let headers = build_headers(request)?;
+        let response = self
+            .inner
+            .post(&request.url)
+            .headers(headers)
+            .json(body)
+            .timeout(request.timeout)
+            .send()
+            .await
+            .map_err(|e| classify_transport_error(&e, &request.url))?;
+        self.read_json_response(response, &request.url).await
+    }
+
     async fn get_json_once<T: DeserializeOwned>(
         &self,
         request: &JsonRequest<'_>,
@@ -178,6 +200,14 @@ impl HttpClient {
             .send()
             .await
             .map_err(|e| classify_transport_error(&e, &request.url))?;
+        self.read_json_response(response, &request.url).await
+    }
+
+    async fn read_json_response<T: DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+        url: &str,
+    ) -> Result<T, ProviderError> {
 
         let status = response.status();
         let retry_after = response
@@ -190,7 +220,7 @@ impl HttpClient {
             if len as usize > MAX_BODY_BYTES {
                 return Err(ProviderError::parse(format!(
                     "response from {} is {} bytes, above the {} byte cap",
-                    host_of(&request.url),
+                    host_of(url),
                     len,
                     MAX_BODY_BYTES
                 )));
@@ -200,12 +230,12 @@ impl HttpClient {
         let body = response
             .text()
             .await
-            .map_err(|e| classify_transport_error(&e, &request.url))?;
+            .map_err(|e| classify_transport_error(&e, url))?;
 
         if body.len() > MAX_BODY_BYTES {
             return Err(ProviderError::parse(format!(
                 "response from {} exceeded the {} byte cap",
-                host_of(&request.url),
+                host_of(url),
                 MAX_BODY_BYTES
             )));
         }
@@ -215,11 +245,11 @@ impl HttpClient {
                 status.as_u16(),
                 retry_after,
                 &body,
-                &host_of(&request.url),
+                &host_of(url),
             ));
         }
 
-        decode_json::<T>(&body, &host_of(&request.url))
+        decode_json::<T>(&body, &host_of(url))
     }
 }
 

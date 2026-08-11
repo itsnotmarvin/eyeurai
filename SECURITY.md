@@ -12,6 +12,7 @@ EyeUrAI reads sensitive account metadata, so its security boundary is intentiona
 - Cached snapshots must not contain prompts, responses, files, or code.
 - Retained account snapshots contain only normalized quota metadata, use pseudonymous account IDs, and are stored in owner-only files. OAuth credentials and refresh tokens are never copied into the snapshot registry.
 - Codex accounts added in EyeUrAI use owner-only, isolated `CODEX_HOME` directories. The official Codex app-server performs login and token rotation inside each directory; raw tokens are never returned to the React webview or written to EyeUrAI's snapshot registry.
+- Claude accounts added in EyeUrAI use owner-only, isolated profile directories. EyeUrAI obtains each grant through Anthropic's official browser sign-in with a read-only scope (`user:profile`, unable to run inference), stores it only in that profile's owner-only file, and rotates it under a profile lock. The terminal's Claude Code login is never read, refreshed, or rewritten by this flow, and these tokens are never returned to the React webview or written to the snapshot registry.
 
 ## Reporting a vulnerability
 

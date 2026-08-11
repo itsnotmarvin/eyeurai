@@ -25,19 +25,26 @@ const LOCAL_USAGE_COMMANDS = ["scan_local_usage"] as const;
 const TRAY_DISPLAY_COMMANDS = ["set_tray_display"] as const;
 const START_CODEX_LOGIN_COMMANDS = ["start_codex_account_login"] as const;
 const CODEX_LOGIN_EVENT = "eyeurai://codex-profile-login";
+const START_CLAUDE_LOGIN_COMMANDS = ["start_claude_account_login"] as const;
+const CLAUDE_LOGIN_EVENT = "eyeurai://claude-profile-login";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
 
-export interface CodexLoginStarted {
+/** Correlation handle returned when a provider profile sign-in starts. */
+export interface ProfileLoginStarted {
   profileId: string;
 }
 
-export interface CodexLoginEvent {
+/** Completion event for a provider profile sign-in. */
+export interface ProfileLoginEvent {
   profileId: string;
   success: boolean;
   message?: string;
 }
+
+export type CodexLoginStarted = ProfileLoginStarted;
+export type CodexLoginEvent = ProfileLoginEvent;
 
 let invokeCache: InvokeFn | null | undefined;
 const resolvedCommand = new Map<string, string>();
@@ -109,21 +116,29 @@ export async function requestRefresh(
 }
 
 /** Starts an official Codex browser login in a new isolated CODEX_HOME. */
-export async function startCodexAccountLogin(): Promise<CodexLoginStarted | null> {
-  return await invokeAny<CodexLoginStarted>(
+export async function startCodexAccountLogin(): Promise<ProfileLoginStarted | null> {
+  return await invokeAny<ProfileLoginStarted>(
     "codex-login-start",
     START_CODEX_LOGIN_COMMANDS,
   );
 }
 
-/** Watches the provider-owned Codex browser flow for completion. */
-export async function subscribeToCodexLogin(
-  onEvent: (event: CodexLoginEvent) => void,
+/** Starts Anthropic's official browser sign-in for a new isolated Claude profile. */
+export async function startClaudeAccountLogin(): Promise<ProfileLoginStarted | null> {
+  return await invokeAny<ProfileLoginStarted>(
+    "claude-login-start",
+    START_CLAUDE_LOGIN_COMMANDS,
+  );
+}
+
+async function subscribeToProfileLogin(
+  eventName: string,
+  onEvent: (event: ProfileLoginEvent) => void,
 ): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
   try {
     const { listen } = await import("@tauri-apps/api/event");
-    return await listen<CodexLoginEvent>(CODEX_LOGIN_EVENT, (message) => {
+    return await listen<ProfileLoginEvent>(eventName, (message) => {
       const payload = message.payload;
       if (
         payload &&
@@ -136,6 +151,20 @@ export async function subscribeToCodexLogin(
   } catch {
     return () => {};
   }
+}
+
+/** Watches the provider-owned Codex browser flow for completion. */
+export async function subscribeToCodexLogin(
+  onEvent: (event: ProfileLoginEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribeToProfileLogin(CODEX_LOGIN_EVENT, onEvent);
+}
+
+/** Watches the EyeUrAI-owned Claude browser sign-in for completion. */
+export async function subscribeToClaudeLogin(
+  onEvent: (event: ProfileLoginEvent) => void,
+): Promise<UnlistenFn> {
+  return subscribeToProfileLogin(CLAUDE_LOGIN_EVENT, onEvent);
 }
 
 function safeCount(value: unknown): number {

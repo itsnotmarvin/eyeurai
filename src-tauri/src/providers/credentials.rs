@@ -117,6 +117,12 @@ impl LocalCredentialResolver {
     ) -> Result<ResolvedCredential, ProviderError> {
         match &descriptor.credential {
             CredentialRef::ClaudeCli => self.read_claude().await,
+            // EyeUrAI-owned Claude profiles refresh and rotate their own
+            // grant, which this read-only resolver must never do; the Claude
+            // adapter resolves them through `claude_profiles` instead.
+            CredentialRef::ClaudeProfile { .. } => Err(ProviderError::internal(
+                "EyeUrAI Claude accounts are resolved by their profile manager",
+            )),
             CredentialRef::CodexCli { path } => self.read_codex(path.as_deref()).await,
             CredentialRef::Env { var } => read_env(var),
             CredentialRef::Keychain { service, account } => {

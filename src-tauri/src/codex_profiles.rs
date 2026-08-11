@@ -5,49 +5,46 @@
 //! account/rate-limit metadata over JSON-RPC. EyeUrAI never receives a raw
 //! access token or refresh token for these profiles.
 
-use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex as AsyncMutex;
 
 use crate::models::{AccountDescriptor, CredentialRef, ProviderId};
+use crate::profile_store::ProfileStore;
 use crate::providers::error::{scrub, ProviderError};
 
 pub const LOGIN_EVENT: &str = "eyeurai://codex-profile-login";
 const PROFILE_DIRECTORY: &str = "codex-profiles-v1";
 const AUTH_FILE: &str = "auth.json";
-const PROFILE_LOCK_FILE: &str = ".eyeurai-profile.lock";
 const RPC_TIMEOUT: Duration = Duration::from_secs(20);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const RPC_ENV_ALLOWLIST: [&str; 11] = [
+const RPC_ENV_ALLOWLIST: [&str; 15] = [
     "HOME",
     "USERPROFILE",
     "HOMEDRIVE",
     "HOMEPATH",
     "SystemRoot",
+    "SystemDrive",
     "WINDIR",
     "TMPDIR",
     "TMP",
     "TEMP",
     "LANG",
     "LC_ALL",
+    // npm installs Codex as a shim that re-launches Node from PATH, and
+    // Windows `.cmd` shims need the command interpreter. These variables carry
+    // no credentials, proxies, or endpoint overrides.
+    "PATH",
+    "COMSPEC",
+    "PATHEXT",
 ];
-static PROFILE_NONCE: AtomicU64 = AtomicU64::new(0);
-static PROFILE_LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexLoginStarted {
@@ -76,44 +73,25 @@ struct RpcProcess {
     lines: Lines<BufReader<ChildStdout>>,
 }
 
-struct ProfileAccessGuard {
-    _in_process: tokio::sync::OwnedMutexGuard<()>,
-    lock_file: File,
+fn store(app_data_dir: &Path) -> ProfileStore {
+    ProfileStore::new(app_data_dir, PROFILE_DIRECTORY)
 }
 
-impl Drop for ProfileAccessGuard {
-    fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.lock_file);
-    }
+/// Rebuild the store a profile belongs to from the profile path itself; the
+/// path is fully re-validated before use.
+fn store_for_profile(profile_home: &Path) -> Result<ProfileStore, ProviderError> {
+    let app_data_dir = profile_home
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| ProviderError::forbidden("the Codex profile path has no parent"))?;
+    let store = store(app_data_dir);
+    store.validate_profile_home(profile_home)?;
+    Ok(store)
 }
 
 pub fn discover_descriptors(app_data_dir: &Path) -> Result<Vec<AccountDescriptor>, ProviderError> {
-    let root = profiles_root(app_data_dir);
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => {
-            return Err(ProviderError::internal(
-                "could not inspect EyeUrAI Codex profiles",
-            ))
-        }
-    };
-
     let mut descriptors = Vec::new();
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let Some(profile_id) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        if !valid_profile_id(&profile_id) {
-            continue;
-        }
-        let profile_home = entry.path();
+    for (profile_id, profile_home) in store(app_data_dir).profiles()? {
         let auth_path = profile_home.join(AUTH_FILE);
         let auth_is_regular_file = fs::symlink_metadata(&auth_path)
             .map(|metadata| metadata.file_type().is_file())
@@ -142,23 +120,23 @@ pub async fn start_login(
     app: AppHandle,
     app_data_dir: &Path,
 ) -> Result<CodexLoginStarted, ProviderError> {
-    let root = profiles_root(app_data_dir);
-    create_private_directory(&root)?;
-    let (profile_id, profile_home) = create_profile_directory(&root)?;
+    let store = store(app_data_dir);
+    store.ensure_root()?;
+    let (profile_id, profile_home) = store.create_profile()?;
 
     let result = start_login_in_profile(&profile_home).await;
     let (mut rpc, login_id, auth_url) = match result {
         Ok(result) => result,
         Err(error) => {
-            remove_incomplete_profile(&root, &profile_home);
+            store.remove_incomplete(&profile_home);
             return Err(error);
         }
     };
-    let login_guard = lock_profile_access(&profile_home).await?;
+    let login_guard = store.lock_profile_access(&profile_home).await?;
 
     if let Err(error) = open_external_url(&auth_url) {
         stop_rpc(&mut rpc).await;
-        remove_incomplete_profile(&root, &profile_home);
+        store.remove_incomplete(&profile_home);
         return Err(error);
     }
 
@@ -185,7 +163,7 @@ pub async fn start_login(
 
         stop_rpc(&mut rpc).await;
         if !success {
-            remove_incomplete_profile(&root, &profile_home);
+            store.remove_incomplete(&profile_home);
         }
         let _ = app.emit(
             LOGIN_EVENT,
@@ -205,8 +183,8 @@ pub async fn start_login(
 pub async fn read_managed_account(
     profile_home: &Path,
 ) -> Result<ManagedCodexAccount, ProviderError> {
-    validate_profile_home(profile_home)?;
-    let _guard = lock_profile_access(profile_home).await?;
+    let store = store_for_profile(profile_home)?;
+    let _guard = store.lock_profile_access(profile_home).await?;
     let mut rpc = start_rpc(profile_home).await?;
 
     let result = read_managed_account_inner(&mut rpc).await;
@@ -369,7 +347,7 @@ async fn start_login_request(rpc: &mut RpcProcess) -> Result<(String, String), P
 }
 
 async fn start_rpc(profile_home: &Path) -> Result<RpcProcess, ProviderError> {
-    validate_profile_home(profile_home)?;
+    store_for_profile(profile_home)?;
     let binary = find_codex_binary()?;
     let inherited_environment: Vec<(String, std::ffi::OsString)> = RPC_ENV_ALLOWLIST
         .into_iter()
@@ -528,7 +506,43 @@ fn rpc_error(value: &Value, fallback: &str) -> ProviderError {
     ProviderError::upstream(message)
 }
 
+/// Executable names to try inside each candidate directory. On Windows, npm
+/// installs a `codex.cmd` shim and the standalone installer ships `codex.exe`;
+/// the extensionless `codex` file npm also creates is a POSIX shell shim that
+/// Windows cannot execute, so it is deliberately not a candidate there.
+fn codex_executable_names(windows: bool) -> &'static [&'static str] {
+    if windows {
+        &["codex.exe", "codex.cmd"]
+    } else {
+        &["codex"]
+    }
+}
+
 fn find_codex_binary() -> Result<PathBuf, ProviderError> {
+    let windows = cfg!(target_os = "windows");
+    let names = codex_executable_names(windows);
+
+    let mut directories: Vec<PathBuf> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        directories.push(home.join(".local/bin"));
+        directories.push(home.join(".codex/packages/standalone/current/bin"));
+    }
+    if windows {
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            directories.push(PathBuf::from(app_data).join("npm"));
+        }
+    } else {
+        directories.push(PathBuf::from("/opt/homebrew/bin"));
+        directories.push(PathBuf::from("/usr/local/bin"));
+    }
+    // PATH is the normal install location for npm, asdf and several Windows
+    // package managers. Standard locations win; PATH remains a compatibility
+    // fallback. A same-user process that can replace this executable can also
+    // already read the owner-only profile files directly.
+    if let Some(path) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&path));
+    }
+
     let mut candidates = Vec::new();
     // Keep arbitrary binary overrides out of release builds: the selected
     // process receives CODEX_HOME and therefore has access to that profile's
@@ -537,19 +551,11 @@ fn find_codex_binary() -> Result<PathBuf, ProviderError> {
     if let Some(path) = std::env::var_os("EYEURAI_CODEX_BINARY") {
         candidates.push(PathBuf::from(path));
     }
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local/bin/codex"));
-        candidates.push(home.join(".codex/packages/standalone/current/bin/codex"));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/bin/codex"));
-    candidates.push(PathBuf::from("/usr/local/bin/codex"));
-    // PATH is the normal install location for npm, asdf and several Windows
-    // package managers. Standard locations win; PATH remains a compatibility
-    // fallback. A same-user process that can replace this executable can also
-    // already read the owner-only profile files directly.
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|directory| directory.join("codex")));
-    }
+    candidates.extend(
+        directories
+            .iter()
+            .flat_map(|directory| names.iter().map(move |name| directory.join(name))),
+    );
 
     candidates
         .into_iter()
@@ -562,187 +568,6 @@ fn find_codex_binary() -> Result<PathBuf, ProviderError> {
             ProviderError::credentials_missing("EyeUrAI could not find the Codex CLI")
                 .with_remediation("Install or update the Codex CLI, then reopen EyeUrAI.")
         })
-}
-
-fn profiles_root(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join(PROFILE_DIRECTORY)
-}
-
-fn create_profile_directory(root: &Path) -> Result<(String, PathBuf), ProviderError> {
-    for _ in 0..32 {
-        let profile_id = unique_profile_id();
-        let profile_home = root.join(&profile_id);
-        match fs::create_dir(&profile_home) {
-            Ok(()) => {
-                #[cfg(unix)]
-                fs::set_permissions(&profile_home, fs::Permissions::from_mode(0o700)).map_err(
-                    |_| ProviderError::internal("could not secure the new Codex profile"),
-                )?;
-                return Ok((profile_id, profile_home));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                return Err(ProviderError::internal(
-                    "could not create a new Codex profile",
-                ))
-            }
-        }
-    }
-    Err(ProviderError::internal(
-        "could not allocate a unique Codex profile",
-    ))
-}
-
-fn create_private_directory(path: &Path) -> Result<(), ProviderError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            return Err(ProviderError::forbidden(
-                "the Codex profile directory is not a private directory",
-            ))
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path).map_err(|_| {
-                ProviderError::internal("could not create the Codex profile directory")
-            })?;
-            let metadata = fs::symlink_metadata(path).map_err(|_| {
-                ProviderError::internal("could not inspect the Codex profile directory")
-            })?;
-            if !metadata.file_type().is_dir() {
-                return Err(ProviderError::forbidden(
-                    "the Codex profile directory is not a private directory",
-                ));
-            }
-        }
-        Err(_) => {
-            return Err(ProviderError::internal(
-                "could not inspect the Codex profile directory",
-            ))
-        }
-    }
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|_| ProviderError::internal("could not secure the Codex profile directory"))?;
-    Ok(())
-}
-
-fn validate_profile_home(profile_home: &Path) -> Result<(), ProviderError> {
-    let profile_id = profile_home
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| valid_profile_id(value))
-        .ok_or_else(|| ProviderError::forbidden("the Codex profile identifier is invalid"))?;
-    let parent = profile_home
-        .parent()
-        .ok_or_else(|| ProviderError::forbidden("the Codex profile path has no parent"))?;
-    let parent_metadata = fs::symlink_metadata(parent).map_err(|_| {
-        ProviderError::credentials_missing("the Codex profile root no longer exists")
-    })?;
-    if !parent_metadata.file_type().is_dir()
-        || parent.file_name().and_then(|value| value.to_str()) != Some(PROFILE_DIRECTORY)
-    {
-        return Err(ProviderError::forbidden(
-            "the Codex profile is outside EyeUrAI profile storage",
-        ));
-    }
-    let metadata = fs::symlink_metadata(profile_home)
-        .map_err(|_| ProviderError::credentials_missing("the Codex profile no longer exists"))?;
-    if !metadata.file_type().is_dir() {
-        return Err(ProviderError::internal(
-            "the Codex profile path is not a directory",
-        ));
-    }
-    let canonical_parent = fs::canonicalize(parent)
-        .map_err(|_| ProviderError::internal("could not resolve the Codex profile root"))?;
-    let canonical_profile = fs::canonicalize(profile_home)
-        .map_err(|_| ProviderError::internal("could not resolve the Codex profile"))?;
-    if canonical_profile.parent() != Some(canonical_parent.as_path())
-        || canonical_profile
-            .file_name()
-            .and_then(|value| value.to_str())
-            != Some(profile_id)
-    {
-        return Err(ProviderError::forbidden(
-            "the Codex profile path could not be trusted",
-        ));
-    }
-    Ok(())
-}
-
-fn profile_lock(profile_home: &Path) -> Result<Arc<AsyncMutex<()>>, ProviderError> {
-    let canonical = fs::canonicalize(profile_home)
-        .map_err(|_| ProviderError::credentials_missing("the Codex profile no longer exists"))?;
-    let locks = PROFILE_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
-    let mut locks = locks
-        .lock()
-        .map_err(|_| ProviderError::internal("the Codex profile lock was unavailable"))?;
-    Ok(Arc::clone(
-        locks
-            .entry(canonical)
-            .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
-    ))
-}
-
-async fn lock_profile_access(profile_home: &Path) -> Result<ProfileAccessGuard, ProviderError> {
-    validate_profile_home(profile_home)?;
-    let in_process = profile_lock(profile_home)?.lock_owned().await;
-    let lock_path = profile_home.join(PROFILE_LOCK_FILE);
-    match fs::symlink_metadata(&lock_path) {
-        Ok(metadata) if !metadata.file_type().is_file() => {
-            return Err(ProviderError::forbidden(
-                "the Codex profile lock path could not be trusted",
-            ))
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => {
-            return Err(ProviderError::internal(
-                "could not inspect the Codex profile lock",
-            ))
-        }
-    }
-    let lock_file = {
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        options
-            .open(lock_path)
-            .map_err(|_| ProviderError::internal("could not open the Codex profile lock"))?
-    };
-    let lock_file = tokio::task::spawn_blocking(move || {
-        fs2::FileExt::lock_exclusive(&lock_file).map(|_| lock_file)
-    })
-    .await
-    .map_err(|_| ProviderError::internal("the Codex profile lock task stopped"))?
-    .map_err(|_| ProviderError::internal("could not lock the Codex profile"))?;
-    Ok(ProfileAccessGuard {
-        _in_process: in_process,
-        lock_file,
-    })
-}
-
-fn valid_profile_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 96
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-}
-
-fn unique_profile_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let nonce = PROFILE_NONCE.fetch_add(1, Ordering::Relaxed);
-    format!("profile-{nanos:x}-{:x}-{nonce:x}", std::process::id())
-}
-
-fn remove_incomplete_profile(root: &Path, profile_home: &Path) {
-    if profile_home.parent() == Some(root) {
-        let _ = fs::remove_dir_all(profile_home);
-    }
 }
 
 fn validate_auth_url(value: &str) -> Result<(), ProviderError> {
@@ -763,39 +588,13 @@ fn validate_auth_url(value: &str) -> Result<(), ProviderError> {
 
 fn open_external_url(value: &str) -> Result<(), ProviderError> {
     validate_auth_url(value)?;
-    let mut command = if cfg!(target_os = "macos") {
-        let mut command = std::process::Command::new("open");
-        command.arg(value);
-        command
-    } else if cfg!(target_os = "windows") {
-        let mut command = std::process::Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler").arg(value);
-        command
-    } else {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(value);
-        command
-    };
-    let status = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| {
-            ProviderError::internal("could not open the Codex sign-in page in your browser")
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(ProviderError::internal(
-            "the browser could not open the Codex sign-in page",
-        ))
-    }
+    crate::browser::open_in_browser(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile_store::{create_private_directory, unique_profile_id};
 
     struct TestDirectory(PathBuf);
 
@@ -817,7 +616,7 @@ mod tests {
     #[test]
     fn discovers_only_completed_regular_profiles() {
         let temp = TestDirectory::new();
-        let root = profiles_root(&temp.0);
+        let root = store(&temp.0).root().to_path_buf();
         create_private_directory(&root).unwrap();
 
         let complete = root.join("profile-complete");
@@ -844,78 +643,6 @@ mod tests {
         assert!(validate_auth_url("https://openai.com.evil.example/oauth").is_err());
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn profile_directories_are_owner_only() {
-        let temp = TestDirectory::new();
-        let root = profiles_root(&temp.0);
-        create_private_directory(&root).unwrap();
-        let (_, profile) = create_profile_directory(&root).unwrap();
-        assert_eq!(
-            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        assert_eq!(
-            fs::metadata(profile).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn profile_root_symlink_is_rejected() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TestDirectory::new();
-        fs::create_dir_all(&temp.0).unwrap();
-        let redirect = temp.0.join("redirect");
-        fs::create_dir(&redirect).unwrap();
-        let root = profiles_root(&temp.0);
-        symlink(&redirect, &root).unwrap();
-
-        assert!(create_private_directory(&root).is_err());
-    }
-
-    #[test]
-    fn repeated_profile_access_uses_the_same_in_process_lock() {
-        let temp = TestDirectory::new();
-        let root = profiles_root(&temp.0);
-        create_private_directory(&root).unwrap();
-        let (_, profile) = create_profile_directory(&root).unwrap();
-
-        let first = profile_lock(&profile).unwrap();
-        let second = profile_lock(&profile).unwrap();
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[tokio::test]
-    async fn profile_access_holds_an_owner_only_os_lock() {
-        let temp = TestDirectory::new();
-        let root = profiles_root(&temp.0);
-        create_private_directory(&root).unwrap();
-        let (_, profile) = create_profile_directory(&root).unwrap();
-
-        let guard = lock_profile_access(&profile).await.unwrap();
-        let second = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(profile.join(PROFILE_LOCK_FILE))
-            .unwrap();
-        assert!(fs2::FileExt::try_lock_exclusive(&second).is_err());
-        #[cfg(unix)]
-        assert_eq!(
-            fs::metadata(profile.join(PROFILE_LOCK_FILE))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        drop(guard);
-        assert!(fs2::FileExt::try_lock_exclusive(&second).is_ok());
-        let _ = fs2::FileExt::unlock(&second);
-    }
-
     #[test]
     fn rpc_environment_allowlist_excludes_credentials_and_endpoint_overrides() {
         for forbidden in [
@@ -928,5 +655,18 @@ mod tests {
         ] {
             assert!(!RPC_ENV_ALLOWLIST.contains(&forbidden));
         }
+    }
+
+    #[test]
+    fn rpc_environment_allowlist_keeps_shim_launch_variables() {
+        for required in ["PATH", "COMSPEC", "PATHEXT", "SystemRoot"] {
+            assert!(RPC_ENV_ALLOWLIST.contains(&required));
+        }
+    }
+
+    #[test]
+    fn windows_codex_candidates_use_executable_extensions() {
+        assert_eq!(codex_executable_names(true), ["codex.exe", "codex.cmd"]);
+        assert_eq!(codex_executable_names(false), ["codex"]);
     }
 }

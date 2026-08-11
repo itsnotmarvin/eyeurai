@@ -2,6 +2,13 @@
 
 All notable changes to EyeUrAI are documented in this file.
 
+## Unreleased
+
+- Add isolated Claude accounts: sign in additional claude.ai accounts through Anthropic's official browser flow and watch every account's usage side by side, independent of the terminal login.
+- Request Claude account grants with a read-only scope so tokens EyeUrAI stores can see usage but never run inference; grants are refreshed and rotated inside each owner-only profile.
+- Prefer the independently managed profile when a terminal login and an added account are the same account, for both Claude and Codex.
+- Find the Codex CLI on Windows (`codex.exe` / `codex.cmd`, npm's global directory) and let npm-shim installs launch by passing `PATH` and the command-interpreter variables to the app-server.
+
 ## 1.1.0 — 2026-08-10
 
 - Add isolated Codex profiles so multiple personal and work accounts can remain signed in simultaneously.

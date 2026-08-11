@@ -18,13 +18,20 @@
 //! (the plan). It is best-effort: a failure downgrades the label, never the
 //! quota numbers.
 //!
-//! # What this adapter does not do
+//! # Two kinds of accounts
 //!
-//! It never refreshes the OAuth token. Anthropic rotates the refresh token on
-//! use, so refreshing without writing the new one back would invalidate the
-//! user's `claude` session. An expired token is reported as `Unauthorized`
-//! with a "run `claude /login`" remediation.
+//! The terminal login (`claude /login`) is read-only: this adapter never
+//! refreshes that token, because Anthropic rotates the refresh token on use
+//! and refreshing without writing the new one back would invalidate the
+//! user's `claude` session. An expired terminal login is reported as
+//! `Unauthorized` with a "run `claude /login`" remediation.
+//!
+//! Accounts added inside EyeUrAI are isolated profiles whose OAuth grant
+//! EyeUrAI obtained itself (see [`crate::claude_profiles`]). Those are
+//! refreshed by EyeUrAI inside their own profile, never touching the
+//! terminal login, so several Claude accounts can stay live at once.
 
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -48,6 +55,7 @@ const USAGE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROFILE_TIMEOUT: Duration = Duration::from_secs(5);
 
 const LOGIN_HINT: &str = "Run `claude /login` in a terminal, then refresh.";
+const MANAGED_HINT: &str = "Add the Claude account again in EyeUrAI settings.";
 
 /// Windows we surface from the top level of the usage response, with their
 /// display labels and nominal lengths.
@@ -70,8 +78,9 @@ impl ClaudeProvider {
             provider: ProviderId::Claude,
             display_name: ProviderId::Claude.display_name().to_string(),
             level: CapabilityLevel::Full,
-            data_source: "Anthropic OAuth usage endpoint, using the login Claude Code already stored"
-                .to_string(),
+            data_source:
+                "Anthropic OAuth usage endpoint, using the existing Claude Code login plus isolated EyeUrAI Claude accounts"
+                    .to_string(),
             official_api: false,
             read_only: true,
             supports_multiple_accounts: true,
@@ -85,7 +94,9 @@ impl ClaudeProvider {
                     .to_string(),
                 "This is a first-party endpoint, not a documented public API, so the reported windows can change."
                     .to_string(),
-                "Expired logins are reported as such — EyeUrAI does not refresh tokens, because that would invalidate your `claude` session."
+                "An expired terminal login is reported as such — EyeUrAI never refreshes it, because that would invalidate your `claude` session."
+                    .to_string(),
+                "Accounts added in EyeUrAI use Anthropic's official browser sign-in in an isolated profile; EyeUrAI refreshes only those grants, requested with a read-only scope."
                     .to_string(),
             ],
             doc_url: None,
@@ -122,6 +133,10 @@ impl QuotaProvider for ClaudeProvider {
             for (index, descriptor) in accounts.iter().enumerate() {
                 results.push(fetch_one(ctx, descriptor, index == 0).await);
             }
+            // A user may add the same account that their terminal login
+            // happens to use. Prefer the independently managed profile in
+            // that case, while retaining every distinct managed profile.
+            super::prefer_managed_accounts(&mut results, "claude-profile:");
 
             let mut snapshot =
                 ProviderSnapshot::new(ClaudeProvider::capability_info()).with_accounts(results);
@@ -139,16 +154,38 @@ async fn fetch_one(
 ) -> AccountSnapshot {
     let now = ctx.now();
     let fallback_label = descriptor.fallback_label();
+    let user_agent = ctx.user_agent(ProviderId::Claude);
 
-    let credential = match ctx.credentials.resolve(descriptor).await {
+    // EyeUrAI-owned profiles resolve (and refresh) through their profile
+    // manager; the terminal login goes through the read-only resolver. An
+    // isolated profile stays independently readable regardless of what the
+    // terminal is signed into, so it is always an active row.
+    let managed_home = descriptor.option("claude_home").map(str::to_string);
+    let is_managed = managed_home.is_some();
+    let is_active = is_primary || is_managed;
+    let login_hint = if is_managed { MANAGED_HINT } else { LOGIN_HINT };
+
+    let credential = match &managed_home {
+        Some(home) => {
+            crate::claude_profiles::resolve_credential(Path::new(home), &ctx.http, user_agent, now)
+                .await
+        }
+        None => ctx.credentials.resolve(descriptor).await,
+    };
+    let credential = match credential {
         Ok(credential) => credential,
         Err(err) => {
+            let err = if err.remediation.is_some() {
+                err
+            } else {
+                err.with_remediation(login_hint)
+            };
             let mut snapshot = AccountSnapshot::failed(
                 descriptor.id.clone(),
                 fallback_label,
-                err.with_remediation(LOGIN_HINT).to_info(),
+                err.to_info(),
             );
-            snapshot.active = is_primary;
+            snapshot.active = is_active;
             return snapshot;
         }
     };
@@ -158,14 +195,12 @@ async fn fetch_one(
             descriptor.id.clone(),
             fallback_label,
             ProviderError::unauthorized("your Claude login has expired")
-                .with_remediation(LOGIN_HINT)
+                .with_remediation(login_hint)
                 .to_info(),
         );
-        snapshot.active = is_primary;
+        snapshot.active = is_active;
         return snapshot;
     }
-
-    let user_agent = ctx.user_agent(ProviderId::Claude);
 
     // Profile is best effort: it only improves the row's label and plan.
     let profile = ctx
@@ -194,6 +229,7 @@ async fn fetch_one(
     let label = profile
         .as_ref()
         .and_then(|p| p.email.clone())
+        .or_else(|| credential.hint.email.clone())
         .or_else(|| descriptor.label.clone())
         .unwrap_or(fallback_label);
 
@@ -201,14 +237,22 @@ async fn fetch_one(
         .as_ref()
         .and_then(|p| p.plan.clone())
         .or_else(|| credential.hint.plan.clone());
-    let account_id = stable_account_id(descriptor, profile.as_ref());
+    // The isolated profile is the durable connection identity (see the same
+    // reasoning in the Codex adapter): a failure path only knows the
+    // descriptor, so profile-derived IDs would split one connection into
+    // duplicate rows the moment a read fails.
+    let account_id = if is_managed {
+        descriptor.id.clone()
+    } else {
+        stable_account_id(descriptor, profile.as_ref())
+    };
 
     match usage {
         Ok(value) => match parse_usage(&value, now) {
             Ok(windows) => {
                 let mut snapshot = AccountSnapshot::new(account_id.clone(), label);
                 snapshot.plan = plan;
-                snapshot.active = is_primary;
+                snapshot.active = is_active;
                 snapshot.windows = windows;
                 snapshot.freshness = Freshness::live(now);
                 snapshot
@@ -217,18 +261,18 @@ async fn fetch_one(
                 let mut snapshot =
                     AccountSnapshot::failed(account_id.clone(), label, err.to_info());
                 snapshot.plan = plan;
-                snapshot.active = is_primary;
+                snapshot.active = is_active;
                 snapshot
             }
         },
         Err(err) => {
             let err = match err.kind {
-                crate::models::ProviderErrorKind::Unauthorized => err.with_remediation(LOGIN_HINT),
+                crate::models::ProviderErrorKind::Unauthorized => err.with_remediation(login_hint),
                 _ => err,
             };
             let mut snapshot = AccountSnapshot::failed(account_id, label, err.to_info());
             snapshot.plan = plan;
-            snapshot.active = is_primary;
+            snapshot.active = is_active;
             snapshot
         }
     }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import {
   PROVIDER_META,
@@ -12,10 +12,12 @@ import { reconcileThresholds } from "../lib/preferences";
 import { displayPercent, menuBarQuotaLabel } from "../lib/format";
 import { ensureNotificationPermission } from "../lib/notify";
 import {
+  startClaudeAccountLogin,
   startCodexAccountLogin,
+  subscribeToClaudeLogin,
   subscribeToCodexLogin,
-  type CodexLoginEvent,
 } from "../lib/ipc";
+import { useProfileLogin } from "../hooks/useProfileLogin";
 import { ProviderMark } from "./ProviderMark";
 import { Switch } from "./controls/Switch";
 import { ThresholdSlider } from "./controls/ThresholdSlider";
@@ -35,6 +37,24 @@ export interface SettingsViewProps {
   requestPermission?: () => Promise<boolean>;
 }
 
+const LOGIN_FLOW_COPY: Record<
+  "claude" | "openai",
+  { starting: string; waiting: string; success: string; add: string }
+> = {
+  claude: {
+    starting: "Starting the Claude sign-in…",
+    waiting: "Your browser is open. Finish signing into the Claude account there.",
+    success: "Claude account added. Its usage can now refresh independently.",
+    add: "Add Claude account",
+  },
+  openai: {
+    starting: "Starting the Codex sign-in service…",
+    waiting: "Your browser is open. Finish signing into the Codex account there.",
+    success: "Codex account added. Its usage can now refresh independently.",
+    add: "Add Codex account",
+  },
+};
+
 const SHORTCUTS: Array<[string, string]> = [
   ["R", "Refresh now"],
   [",", "Open settings"],
@@ -47,9 +67,8 @@ const CONNECTION_COPY: Record<
 > = {
   claude: {
     title: "Connect Claude",
-    body: "Run Claude Code sign-in in a terminal, then check again. EyeUrAI observes whichever Claude account that CLI currently uses.",
-    command: "claude /login",
-    note: "Previously retained account identities stay listed when the terminal login changes. Claude controls whether separate CLI logins can coexist.",
+    body: "EyeUrAI opens Anthropic's official browser sign-in in a separate profile for each account. Adding another account does not replace this one — or your terminal login.",
+    note: "Your existing Claude Code terminal login is picked up automatically. Accounts added here use a read-only sign-in that can see usage but can never run Claude.",
   },
   openai: {
     title: "Connect OpenAI / Codex",
@@ -80,6 +99,10 @@ function accountSourceLabel(account: Account): string {
     const state = account.status === "fresh" ? "Live" : "Last read unavailable";
     return `Connected Codex profile · ${state}${plan}`;
   }
+  if (account.provider === "claude" && account.id.startsWith("claude-profile:")) {
+    const state = account.status === "fresh" ? "Live" : "Last read unavailable";
+    return `Connected Claude account · ${state}${plan}`;
+  }
   if (account.provider === "claude" || account.provider === "openai") {
     if (account.isCliActive === true) return `Current terminal login${plan}`;
     if (account.isCliActive === false) return `Retained account · Last known data${plan}`;
@@ -103,20 +126,25 @@ export function SettingsView({
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectProvider, setConnectProvider] = useState<ProviderId | null>(null);
-  const [codexLogin, setCodexLogin] = useState<{
-    status: "idle" | "starting" | "waiting" | "success" | "error";
-    profileId?: string;
-    message?: string;
-  }>({ status: "idle" });
-  const codexLoginAttemptId = useRef(0);
-  const codexLoginMounted = useRef(true);
-  const codexLoginAttempt = useRef<{
-    id: number;
-    profileId?: string;
-    pendingEvents: Map<string, CodexLoginEvent>;
-  } | null>(null);
-  const codexLoginListener = useRef<((event: CodexLoginEvent) => void) | null>(null);
-  const codexLoginSubscription = useRef<Promise<() => void> | null>(null);
+  const codexFlow = useProfileLogin({
+    start: startCodexAccountLogin,
+    subscribe: subscribeToCodexLogin,
+    unavailableMessage: "Codex account sign-in is available in the installed EyeUrAI app.",
+    incompleteMessage: "Codex sign-in was not completed.",
+    onSuccess: onRefreshAccounts,
+  });
+  const claudeFlow = useProfileLogin({
+    start: startClaudeAccountLogin,
+    subscribe: subscribeToClaudeLogin,
+    unavailableMessage: "Claude account sign-in is available in the installed EyeUrAI app.",
+    incompleteMessage: "Claude sign-in was not completed.",
+    onSuccess: onRefreshAccounts,
+  });
+  const loginFlows = { openai: codexFlow, claude: claudeFlow } as const;
+  const activeFlow =
+    connectProvider === "openai" || connectProvider === "claude"
+      ? loginFlows[connectProvider]
+      : null;
   const askForPermission = requestPermission ?? ensureNotificationPermission;
   const connectedAccounts = accounts.filter((account) => !/-status-\d+$/.test(account.id));
   const pinnedAccount = preferences.pinnedQuota
@@ -130,104 +158,6 @@ export function SettingsView({
     : preferences.pinnedQuota
       ? "Unavailable"
       : null;
-
-  function completeCodexLogin(
-    attempt: NonNullable<typeof codexLoginAttempt.current>,
-    event: CodexLoginEvent,
-  ): void {
-    if (codexLoginAttempt.current?.id !== attempt.id || attempt.profileId !== event.profileId) {
-      return;
-    }
-    codexLoginAttempt.current = null;
-    setCodexLogin(
-      event.success
-        ? { status: "success", profileId: event.profileId }
-        : {
-            status: "error",
-            profileId: event.profileId,
-            message: event.message ?? "Codex sign-in was not completed.",
-          },
-    );
-    if (event.success) onRefreshAccounts();
-  }
-
-  codexLoginListener.current = (event) => {
-    if (!codexLoginMounted.current) return;
-    const attempt = codexLoginAttempt.current;
-    if (!attempt) return;
-    if (!attempt.profileId) {
-      // A completion can beat the start command's response. Keep a small,
-      // profile-keyed buffer until that response provides the correlation ID.
-      attempt.pendingEvents.set(event.profileId, event);
-      if (attempt.pendingEvents.size > 16) {
-        const oldestProfileId = attempt.pendingEvents.keys().next().value;
-        if (oldestProfileId !== undefined) attempt.pendingEvents.delete(oldestProfileId);
-      }
-      return;
-    }
-    completeCodexLogin(attempt, event);
-  };
-
-  function ensureCodexLoginSubscription(): Promise<() => void> {
-    if (!codexLoginSubscription.current) {
-      codexLoginSubscription.current = subscribeToCodexLogin((event) => {
-        codexLoginListener.current?.(event);
-      });
-    }
-    return codexLoginSubscription.current;
-  }
-
-  useEffect(() => {
-    codexLoginMounted.current = true;
-    const subscription = ensureCodexLoginSubscription();
-    return () => {
-      codexLoginMounted.current = false;
-      codexLoginAttempt.current = null;
-      if (codexLoginSubscription.current === subscription) {
-        codexLoginSubscription.current = null;
-      }
-      void subscription.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  async function beginCodexLogin(): Promise<void> {
-    const attempt: NonNullable<typeof codexLoginAttempt.current> = {
-      id: ++codexLoginAttemptId.current,
-      pendingEvents: new Map<string, CodexLoginEvent>(),
-    };
-    codexLoginAttempt.current = attempt;
-    setCodexLogin({ status: "starting" });
-    try {
-      // Do not open the browser flow until its completion listener is active.
-      await ensureCodexLoginSubscription();
-      if (codexLoginAttempt.current?.id !== attempt.id) return;
-      const started = await startCodexAccountLogin();
-      if (codexLoginAttempt.current?.id !== attempt.id) return;
-      if (!started) {
-        codexLoginAttempt.current = null;
-        setCodexLogin({
-          status: "error",
-          message: "Codex account sign-in is available in the installed EyeUrAI app.",
-        });
-        return;
-      }
-      attempt.profileId = started.profileId;
-      const earlyCompletion = attempt.pendingEvents.get(started.profileId);
-      attempt.pendingEvents.clear();
-      if (earlyCompletion) {
-        completeCodexLogin(attempt, earlyCompletion);
-      } else {
-        setCodexLogin({ status: "waiting", profileId: started.profileId });
-      }
-    } catch (cause) {
-      if (codexLoginAttempt.current?.id !== attempt.id) return;
-      codexLoginAttempt.current = null;
-      setCodexLogin({
-        status: "error",
-        message: cause instanceof Error ? cause.message : String(cause),
-      });
-    }
-  }
 
   function toggleProvider(provider: ProviderId, enabled: boolean): void {
     const next = enabled
@@ -260,7 +190,8 @@ export function SettingsView({
             className="btn btn--ghost btn--mini"
             onClick={() => {
               setConnectProvider(null);
-              setCodexLogin({ status: "idle" });
+              codexFlow.reset();
+              claudeFlow.reset();
               setConnectOpen(true);
             }}
           >
@@ -268,7 +199,8 @@ export function SettingsView({
           </button>
         </div>
         <p className="settings__caption">
-          EyeUrAI found existing sign-ins on this Mac. It did not sign in for you.
+          Existing sign-ins are detected automatically. Accounts you add here use the
+          provider&apos;s official browser sign-in.
         </p>
         <div className="settings__accounts">
           {connectedAccounts.map((account) => (
@@ -473,7 +405,7 @@ export function SettingsView({
                 <p className="connectsheet__subtitle">
                   {connectProvider
                     ? "EyeUrAI retains non-secret identity details; credentials stay in provider-managed or operating-system storage."
-                    : "Choose a provider. OpenAI can add an isolated Codex account; other providers check their existing sign-ins."}
+                    : "Choose a provider. Claude and OpenAI can add isolated accounts; other providers check their existing sign-ins."}
                 </p>
               </div>
               <button
@@ -500,18 +432,20 @@ export function SettingsView({
                 {CONNECTION_COPY[connectProvider].note ? (
                   <p className="connectsheet__note">{CONNECTION_COPY[connectProvider].note}</p>
                 ) : null}
-                {connectProvider === "openai" && codexLogin.status !== "idle" ? (
+                {activeFlow &&
+                (connectProvider === "openai" || connectProvider === "claude") &&
+                activeFlow.login.status !== "idle" ? (
                   <p
                     className="connectsheet__note"
-                    role={codexLogin.status === "error" ? "alert" : "status"}
+                    role={activeFlow.login.status === "error" ? "alert" : "status"}
                   >
-                    {codexLogin.status === "starting"
-                      ? "Starting the Codex sign-in service…"
-                      : codexLogin.status === "waiting"
-                        ? "Your browser is open. Finish signing into the Codex account there."
-                        : codexLogin.status === "success"
-                          ? "Codex account added. Its usage can now refresh independently."
-                          : codexLogin.message}
+                    {activeFlow.login.status === "starting"
+                      ? LOGIN_FLOW_COPY[connectProvider].starting
+                      : activeFlow.login.status === "waiting"
+                        ? LOGIN_FLOW_COPY[connectProvider].waiting
+                        : activeFlow.login.status === "success"
+                          ? LOGIN_FLOW_COPY[connectProvider].success
+                          : activeFlow.login.message}
                   </p>
                 ) : null}
               </div>
@@ -525,7 +459,8 @@ export function SettingsView({
                     key={provider}
                     onClick={() => {
                       setConnectProvider(provider);
-                      if (provider === "openai") setCodexLogin({ status: "idle" });
+                      if (provider === "openai") codexFlow.reset();
+                      if (provider === "claude") claudeFlow.reset();
                     }}
                   >
                     <span className="connectsheet__mark">
@@ -548,28 +483,31 @@ export function SettingsView({
                   Back
                 </button>
               ) : null}
-              {connectProvider === "openai" ? (
+              {activeFlow && (connectProvider === "openai" || connectProvider === "claude") ? (
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={codexLogin.status === "starting" || codexLogin.status === "waiting"}
+                  disabled={
+                    activeFlow.login.status === "starting" ||
+                    activeFlow.login.status === "waiting"
+                  }
                   onClick={() => {
-                    if (codexLogin.status === "success") {
+                    if (activeFlow.login.status === "success") {
                       setConnectOpen(false);
                     } else {
-                      void beginCodexLogin();
+                      void activeFlow.begin();
                     }
                   }}
                 >
-                  {codexLogin.status === "starting"
+                  {activeFlow.login.status === "starting"
                     ? "Starting…"
-                    : codexLogin.status === "waiting"
+                    : activeFlow.login.status === "waiting"
                       ? "Waiting for browser…"
-                      : codexLogin.status === "success"
+                      : activeFlow.login.status === "success"
                         ? "Done"
-                        : codexLogin.status === "error"
+                        : activeFlow.login.status === "error"
                           ? "Try again"
-                          : "Add Codex account"}
+                          : LOGIN_FLOW_COPY[connectProvider].add}
                 </button>
               ) : (
                 <button

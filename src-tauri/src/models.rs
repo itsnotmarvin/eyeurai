@@ -560,6 +560,10 @@ pub enum CredentialRef {
     /// macOS Keychain item `Claude Code-credentials`, otherwise
     /// `~/.claude/.credentials.json`.
     ClaudeCli,
+    /// An OAuth grant EyeUrAI obtained itself for an isolated Claude profile
+    /// added in EyeUrAI settings. Stored in that profile's owner-only
+    /// `auth.json`; rotated by EyeUrAI, never shared with the terminal login.
+    ClaudeProfile { path: String },
     /// The credential written by `codex login`: `~/.codex/auth.json`.
     /// `path` overrides the default location (useful for multi-profile setups).
     CodexCli {
@@ -587,6 +591,9 @@ impl CredentialRef {
     pub fn describe(&self) -> String {
         match self {
             CredentialRef::ClaudeCli => "Claude Code login (system credential store)".to_string(),
+            CredentialRef::ClaudeProfile { path } => {
+                format!("EyeUrAI Claude account credentials at {path}")
+            }
             CredentialRef::CodexCli { path } => match path {
                 Some(p) => format!("Codex CLI credentials at {p}"),
                 None => "Codex CLI login (~/.codex/auth.json)".to_string(),

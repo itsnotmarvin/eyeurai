@@ -26,7 +26,6 @@
 //! EyeUrAI never refreshes the default CLI token. For isolated profiles, the
 //! Codex app-server owns persistence and token rotation inside that profile.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -129,17 +128,7 @@ impl QuotaProvider for CodexProvider {
             // A user may add the same account that their default terminal
             // happens to use. Prefer the independently managed profile in
             // that case, while retaining every distinct managed profile.
-            let managed_labels: BTreeSet<String> = results
-                .iter()
-                .filter(|account| account.account_id.starts_with("codex-profile:"))
-                .map(|account| account.label.to_ascii_lowercase())
-                .collect();
-            results.retain(|account| {
-                account.account_id.starts_with("codex-profile:")
-                    || !managed_labels.contains(&account.label.to_ascii_lowercase())
-            });
-            let mut observed = BTreeSet::new();
-            results.retain(|account| observed.insert(account.account_id.clone()));
+            super::prefer_managed_accounts(&mut results, "codex-profile:");
 
             let mut snapshot =
                 ProviderSnapshot::new(CodexProvider::capability_info()).with_accounts(results);

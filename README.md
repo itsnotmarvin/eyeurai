@@ -53,7 +53,7 @@ Development builds started with `npm run desktop:dev` do not check for updates. 
 
 ### Provider sign-in
 
-EyeUrAI reuses provider credentials that already exist on your computer. It does not ask for subscription passwords or browser cookies.
+EyeUrAI reuses provider credentials that already exist on your computer, and can add further accounts through each provider's official browser sign-in. It never asks for subscription passwords or browser cookies.
 
 ```sh
 # OpenAI / Codex
@@ -61,7 +61,10 @@ EyeUrAI reuses provider credentials that already exist on your computer. It does
 # official Codex browser flow in a separate profile for each account.
 
 # Anthropic / Claude
-claude auth login
+# Add accounts from EyeUrAI Settings → Add account. EyeUrAI opens
+# Anthropic's official browser sign-in in a separate profile for each
+# account. An existing terminal login is also picked up automatically:
+claude /login
 ```
 
 For OpenRouter, launch EyeUrAI from a terminal where `OPENROUTER_API_KEY` or `OPENROUTER_KEY` is set. Gemini usage percentages remain unavailable until Google exposes a supported API for them.
@@ -78,7 +81,7 @@ Select that button and choose **Update & restart**. EyeUrAI downloads and verifi
 - OpenAI/Codex primary and secondary quota windows
 - OpenRouter credits and key limits
 - Gemini connection status, with an explicit unsupported state until Google exposes current usage percentages through a supported API
-- Multiple personal and work accounts per provider
+- Multiple live Claude and Codex accounts side by side, plus retained snapshots when a terminal login changes
 - Percentage-used bars, reset countdowns, stale/error states, and optional alerts
 
 The first release deliberately does **not** collect conversations, calculate productivity scores, draw historical graphs, switch active credentials, sync data to a cloud service, or start automatically at login.
@@ -90,7 +93,8 @@ EyeUrAI has no account system, analytics, telemetry, or hosted backend.
 - Provider requests go directly from your computer to that provider.
 - Prompts, responses, files, and source code are never collected.
 - UI snapshots contain only quota metadata such as percentages and reset times.
-- Secrets remain in the provider or operating-system credential store and are never sent to the webview.
+- Secrets stay out of the interface: they remain in the provider or operating-system credential store, or — for accounts added in EyeUrAI — in that account's owner-only profile directory, and are never sent to the webview.
+- Claude accounts added in EyeUrAI are granted a read-only scope, so the stored tokens can read usage but can never run Claude.
 - Removing an EyeUrAI account removes its local configuration.
 
 See [SECURITY.md](SECURITY.md) for the security model and reporting process.
@@ -115,14 +119,14 @@ This first implementation reuses credentials that already exist on your computer
 
 | Provider | Current connection | What EyeUrAI can show |
 | --- | --- | --- |
-| Claude | The OAuth login written by Claude Code | Five-hour, weekly, and model-specific percentages and resets |
+| Claude | The OAuth login written by Claude Code plus isolated accounts added in EyeUrAI | Independently refreshed five-hour, weekly, and model-specific percentages and resets for multiple accounts |
 | OpenAI / Codex | The existing `~/.codex` login plus isolated profiles added in EyeUrAI | Independently refreshed primary/secondary subscription windows for multiple accounts |
 | OpenRouter | `OPENROUTER_API_KEY` or `OPENROUTER_KEY` when EyeUrAI is launched | The documented current-key USD spend ceiling and reset cadence |
 | Gemini | Google project configuration is detected when available | A clear unavailable state; Google currently directs users to AI Studio for active rate limits and does not expose the account-wide percentage this app needs |
 
-Claude and the default Codex connection use read-only first-party endpoints also used by their official clients, but those routes are not documented public APIs and may change. OpenRouter uses its documented current-key API. EyeUrAI never refreshes or rewrites the default terminal login. Codex accounts added inside EyeUrAI use the official Codex app-server, which owns browser login, credential persistence, and refresh-token rotation inside a separate `CODEX_HOME` for each account.
+Claude and the default Codex connection use read-only first-party endpoints also used by their official clients, but those routes are not documented public APIs and may change. OpenRouter uses its documented current-key API. EyeUrAI never refreshes or rewrites the default terminal logins. Codex accounts added inside EyeUrAI use the official Codex app-server, which owns browser login, credential persistence, and refresh-token rotation inside a separate `CODEX_HOME` for each account. Claude accounts added inside EyeUrAI sign in through Anthropic's official browser flow — the same first-party OAuth client Claude Code uses — into a separate EyeUrAI profile per account; EyeUrAI requests a read-only scope, stores each grant only in that profile, and rotates it itself without ever touching the terminal login.
 
-The data model and UI support accounts from multiple providers at the same time. Automatic discovery assigns Claude and Codex logins stable, pseudonymous account IDs and retains the last successful quota snapshot when a terminal login changes. Codex accounts added through EyeUrAI each have an isolated provider-owned profile, so multiple Codex accounts can stay signed in and refresh live without copying credentials between them. Retained snapshots are clearly marked as last-known data.
+The data model and UI support accounts from multiple providers at the same time. Automatic discovery assigns Claude and Codex logins stable, pseudonymous account IDs and retains the last successful quota snapshot when a terminal login changes. Claude and Codex accounts added through EyeUrAI each have an isolated profile, so multiple accounts can stay signed in and refresh live without copying credentials between them. Adding the same account the terminal already uses shows one row, preferring the independently refreshed profile. Retained snapshots are clearly marked as last-known data.
 
 ## Development
 

@@ -3,7 +3,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, PhysicalPosition, Runtime};
 
 mod account_registry;
+mod browser;
+mod claude_profiles;
 mod codex_profiles;
+mod profile_store;
 mod commands;
 mod local_usage;
 mod models;
@@ -160,6 +163,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_quotas,
+            commands::start_claude_account_login,
             commands::start_codex_account_login,
             commands::provider_capabilities,
             commands::get_demo_snapshot,

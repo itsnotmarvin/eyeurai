@@ -154,10 +154,82 @@ describe("App", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Add account" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Claude" }));
-    expect(within(dialog).getByText("claude /login")).toBeInTheDocument();
     expect(within(dialog).getByText(/credentials stay/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/retained account identities stay listed/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Claude controls whether separate CLI logins/i)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/separate profile for each account/i),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/terminal login is picked up automatically/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Add Claude account" })).toBeInTheDocument();
+  });
+
+  it("adds a Claude account through an isolated EyeUrAI-owned profile", async () => {
+    let completeLogin: ((event: ipc.ProfileLoginEvent) => void) | null = null;
+    vi.spyOn(ipc, "subscribeToClaudeLogin").mockImplementation(async (listener) => {
+      completeLogin = listener;
+      return () => {};
+    });
+    const startLogin = vi
+      .spyOn(ipc, "startClaudeAccountLogin")
+      .mockResolvedValue({ profileId: "profile-claude-second" });
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add account" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Claude" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Claude account" }));
+
+    await waitFor(() => expect(startLogin).toHaveBeenCalledTimes(1));
+    expect(
+      await within(dialog).findByText(/finish signing into the Claude account/i),
+    ).toBeInTheDocument();
+
+    act(() => {
+      completeLogin?.({ profileId: "some-other-profile", success: true });
+    });
+    expect(within(dialog).getByText(/finish signing into the Claude account/i)).toBeInTheDocument();
+
+    act(() => {
+      completeLogin?.({ profileId: "profile-claude-second", success: true });
+    });
+    expect(
+      await within(dialog).findByText(/usage can now refresh independently/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("reports a failed Claude sign-in with its message", async () => {
+    let completeLogin: ((event: ipc.ProfileLoginEvent) => void) | null = null;
+    vi.spyOn(ipc, "subscribeToClaudeLogin").mockImplementation(async (listener) => {
+      completeLogin = listener;
+      return () => {};
+    });
+    vi.spyOn(ipc, "startClaudeAccountLogin").mockResolvedValue({
+      profileId: "profile-claude-fail",
+    });
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const dialog = screen.getByRole("dialog", { name: "Add account" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Claude" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Claude account" }));
+    await within(dialog).findByText(/finish signing into the Claude account/i);
+
+    act(() => {
+      completeLogin?.({
+        profileId: "profile-claude-fail",
+        success: false,
+        message: "Claude sign-in was cancelled.",
+      });
+    });
+    expect(await within(dialog).findByText("Claude sign-in was cancelled.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
   it("adds a Codex account through an isolated provider-owned profile", async () => {

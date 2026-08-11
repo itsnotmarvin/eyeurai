@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::account_registry::AccountSnapshotRegistry;
+use crate::claude_profiles::{self, ClaudeLoginStarted};
 use crate::codex_profiles::{self, CodexLoginStarted};
 use crate::models::{ProviderCapability, ProviderId, QuotaSnapshot};
 use crate::providers::credentials::default_descriptors;
@@ -63,6 +64,10 @@ impl AppState {
             Ok(mut profiles) => all_descriptors.append(&mut profiles),
             Err(error) => eprintln!("EyeUrAI could not discover Codex profiles: {error}"),
         }
+        match claude_profiles::discover_descriptors(&self.app_data_dir) {
+            Ok(mut profiles) => all_descriptors.append(&mut profiles),
+            Err(error) => eprintln!("EyeUrAI could not discover Claude accounts: {error}"),
+        }
         let descriptors = all_descriptors
             .into_iter()
             .filter(|descriptor| !excluded_account_ids.contains(&descriptor.id))
@@ -101,6 +106,22 @@ pub async fn start_codex_account_login(
     state: State<'_, AppState>,
 ) -> Result<CodexLoginStarted, String> {
     codex_profiles::start_login(app, &state.app_data_dir)
+        .await
+        .map_err(|error| error.message)
+}
+
+/// Start Anthropic's official browser sign-in for a new, isolated Claude
+/// profile. EyeUrAI owns the resulting grant (requested with a read-only
+/// scope) and stores it in that profile only; the terminal's Claude Code
+/// login is never touched.
+#[tauri::command]
+pub async fn start_claude_account_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ClaudeLoginStarted, String> {
+    let http = state.context.http.clone();
+    let user_agent = state.context.user_agent(ProviderId::Claude).to_string();
+    claude_profiles::start_login(app, &state.app_data_dir, http, user_agent)
         .await
         .map_err(|error| error.message)
 }
