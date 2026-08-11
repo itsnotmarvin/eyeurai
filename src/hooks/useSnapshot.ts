@@ -22,8 +22,15 @@ export interface SnapshotController {
   refresh: () => void;
 }
 
-/** Background poll interval while the popover is open. */
-const POLL_INTERVAL_MS = 45_000;
+/** Re-read live provider limits once a minute, including while the popover is hidden. */
+export const AUTO_REFRESH_INTERVAL_MS = 60_000;
+
+interface LoadOptions {
+  /** User-requested refreshes show the refresh affordance; automatic ones stay quiet. */
+  manual: boolean;
+  /** A live refresh contacts providers instead of only reading the in-memory snapshot. */
+  liveRefresh: boolean;
+}
 
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -41,9 +48,9 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
 
   const mounted = useRef(true);
   const inFlight = useRef(false);
-  const queuedLoad = useRef<{ manual: boolean } | null>(null);
+  const queuedLoad = useRef<LoadOptions | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
-  const loadRef = useRef<(options: { manual: boolean }) => Promise<void>>(async () => {});
+  const loadRef = useRef<(options: LoadOptions) => Promise<void>>(async () => {});
 
   useEffect(() => {
     mounted.current = true;
@@ -62,12 +69,13 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
   }, []);
 
   const load = useCallback(
-    async (options: { manual: boolean }) => {
+    async (options: LoadOptions) => {
       if (inFlight.current) {
-        // Coalesce overlapping requests into one follow-up load. A manual
-        // refresh takes precedence so it is never swallowed by a poll.
+        // Coalesce overlapping requests into one follow-up load. Preserve the
+        // strongest request so neither a manual nor live refresh is swallowed.
         queuedLoad.current = {
           manual: options.manual || queuedLoad.current?.manual === true,
+          liveRefresh: options.liveRefresh || queuedLoad.current?.liveRefresh === true,
         };
         return;
       }
@@ -91,7 +99,7 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
         }
 
         const exclusions = exclusionsKey ? exclusionsKey.split("\u0000") : [];
-        const next = options.manual
+        const next = options.liveRefresh
           ? await requestRefresh(exclusions)
           : await fetchSnapshot(exclusions);
         if (next) {
@@ -116,8 +124,11 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
   loadRef.current = load;
 
   useEffect(() => {
-    void load({ manual: false });
-    const interval = setInterval(() => void load({ manual: false }), POLL_INTERVAL_MS);
+    void load({ manual: false, liveRefresh: false });
+    const interval = setInterval(
+      () => void load({ manual: false, liveRefresh: true }),
+      AUTO_REFRESH_INTERVAL_MS,
+    );
     return () => clearInterval(interval);
   }, [load]);
 
@@ -141,7 +152,9 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
     if (!live) return;
     let dispose: (() => void) | null = null;
     let cancelled = false;
-    void subscribeToRefreshRequests(() => void load({ manual: true })).then((unlisten) => {
+    void subscribeToRefreshRequests(
+      () => void load({ manual: true, liveRefresh: true }),
+    ).then((unlisten) => {
       if (cancelled) unlisten();
       else dispose = unlisten;
     });
@@ -152,7 +165,7 @@ export function useSnapshot(excludedAccountIds: readonly string[] = []): Snapsho
   }, [live, load]);
 
   const refresh = useCallback(() => {
-    void load({ manual: true });
+    void load({ manual: true, liveRefresh: true });
   }, [load]);
 
   return {
