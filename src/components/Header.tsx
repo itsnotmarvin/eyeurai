@@ -23,13 +23,13 @@ export function Header({
   onOpenUpdate,
 }: HeaderProps) {
   return (
-    <header className="header" data-variant={variant}>
+    <header className="header" data-variant={variant} data-tauri-drag-region>
       {variant === "dashboard" ? (
-        <div className="header__brand">
-          <span className="header__logo" aria-hidden="true">
-            <EyeMark size={17} />
+        <div className="header__brand" data-tauri-drag-region>
+          <span className="header__logo" aria-hidden="true" data-tauri-drag-region>
+            <EyeMark size={18} />
           </span>
-          <span className="header__wordmark">
+          <span className="header__wordmark" data-tauri-drag-region>
             Eye<span className="header__wordmark-accent">Ur</span>AI
           </span>
         </div>

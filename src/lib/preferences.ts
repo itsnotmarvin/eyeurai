@@ -1,5 +1,9 @@
 import {
+  APPEARANCE_THEMES,
+  BACKGROUND_STYLES,
   PROVIDER_IDS,
+  type AppearanceTheme,
+  type BackgroundStyle,
   type DisconnectedAccount,
   type Preferences,
   type ProviderId,
@@ -37,6 +41,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   warnThreshold: 75,
   criticalThreshold: 90,
   compact: false,
+  appearanceTheme: "porcelain",
+  backgroundStyle: "solid",
   disconnectedAccounts: [],
   localUsageEnabled: false,
   pinnedQuota: null,
@@ -60,6 +66,18 @@ function sanitizeProviders(value: unknown): ProviderId[] {
   }
   // Preserve the canonical provider order regardless of stored order.
   return PROVIDER_IDS.filter((id) => seen.has(id));
+}
+
+function sanitizeAppearanceTheme(value: unknown): AppearanceTheme {
+  return (
+    APPEARANCE_THEMES.find((theme) => theme === value) ?? DEFAULT_PREFERENCES.appearanceTheme
+  );
+}
+
+function sanitizeBackgroundStyle(value: unknown): BackgroundStyle {
+  return (
+    BACKGROUND_STYLES.find((style) => style === value) ?? DEFAULT_PREFERENCES.backgroundStyle
+  );
 }
 
 function sanitizeDisconnectedAccounts(value: unknown): DisconnectedAccount[] {
@@ -125,6 +143,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     warnThreshold: Math.min(warnThreshold, criticalThreshold),
     criticalThreshold: Math.max(criticalThreshold, warnThreshold),
     compact: input.compact === true,
+    appearanceTheme: sanitizeAppearanceTheme(input.appearanceTheme),
+    backgroundStyle: sanitizeBackgroundStyle(input.backgroundStyle),
     disconnectedAccounts: sanitizeDisconnectedAccounts(input.disconnectedAccounts),
     localUsageEnabled: input.localUsageEnabled === true,
     pinnedQuota: sanitizePinnedQuota(input.pinnedQuota),

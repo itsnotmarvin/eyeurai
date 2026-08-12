@@ -242,7 +242,12 @@ export function App() {
 
   if (!preferences.onboardingCompleted) {
     return (
-      <div className="app" data-compact={preferences.compact ? "true" : undefined}>
+      <div
+        className="app"
+        data-compact={preferences.compact ? "true" : undefined}
+        data-theme={preferences.appearanceTheme}
+        data-background={preferences.backgroundStyle}
+      >
         <div className="app__frame">
           <Onboarding initial={preferences} onComplete={replace} />
         </div>
@@ -342,7 +347,12 @@ export function App() {
   }
 
   return (
-    <div className="app" data-compact={preferences.compact ? "true" : undefined}>
+    <div
+      className="app"
+      data-compact={preferences.compact ? "true" : undefined}
+      data-theme={preferences.appearanceTheme}
+      data-background={preferences.backgroundStyle}
+    >
       <div className="app__frame">
         <Header
           variant={view === "settings" ? "settings" : "dashboard"}

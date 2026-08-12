@@ -162,6 +162,12 @@ export interface PinnedQuota {
 
 export type RefreshIntervalSeconds = 15 | 30 | 60 | 300;
 
+export const APPEARANCE_THEMES = ["porcelain", "carbon", "lichen", "nocturne"] as const;
+export type AppearanceTheme = (typeof APPEARANCE_THEMES)[number];
+
+export const BACKGROUND_STYLES = ["solid", "material", "gradient", "photo"] as const;
+export type BackgroundStyle = (typeof BACKGROUND_STYLES)[number];
+
 /** Non-secret UI preferences. Persisted locally; never holds credentials. */
 export interface Preferences {
   version: number;
@@ -174,6 +180,10 @@ export interface Preferences {
   criticalThreshold: number;
   /** Denser rows for people with many accounts. */
   compact: boolean;
+  /** Complete visual language: palette, type, shape and data treatment. */
+  appearanceTheme: AppearanceTheme;
+  /** Independent backdrop treatment within the selected theme. */
+  backgroundStyle: BackgroundStyle;
   /** Accounts EyeUrAI must not read. This never logs the provider itself out. */
   disconnectedAccounts: DisconnectedAccount[];
   /** Explicit consent to read usage counters from local Claude/Codex session logs. */

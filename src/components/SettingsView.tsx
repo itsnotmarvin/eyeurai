@@ -1,9 +1,13 @@
 import { useState } from "react";
 
 import {
+  APPEARANCE_THEMES,
+  BACKGROUND_STYLES,
   PROVIDER_META,
   PROVIDER_ORDER,
   type Account,
+  type AppearanceTheme,
+  type BackgroundStyle,
   type DisconnectedAccount,
   type Preferences,
   type ProviderId,
@@ -59,6 +63,27 @@ const SHORTCUTS: Array<[string, string]> = [
   ["R", "Refresh now"],
   [",", "Open settings"],
   ["Esc", "Back / hide popover"],
+];
+
+const THEME_OPTIONS: ReadonlyArray<{
+  id: AppearanceTheme;
+  name: string;
+  description: string;
+}> = [
+  { id: "porcelain", name: "Porcelain", description: "Editorial & warm" },
+  { id: "carbon", name: "Carbon", description: "Technical & sharp" },
+  { id: "lichen", name: "Lichen", description: "Organic & tactile" },
+  { id: "nocturne", name: "Nocturne", description: "Atmospheric & calm" },
+];
+
+const BACKGROUND_OPTIONS: ReadonlyArray<{
+  id: BackgroundStyle;
+  label: string;
+}> = [
+  { id: "solid", label: "Solid" },
+  { id: "material", label: "Material" },
+  { id: "gradient", label: "Gradient" },
+  { id: "photo", label: "Photo" },
 ];
 
 const CONNECTION_COPY: Record<
@@ -358,6 +383,50 @@ export function SettingsView({
 
       <section className="settings__section">
         <h2 className="settings__title">Appearance</h2>
+        <div className="themechooser" role="radiogroup" aria-label="Color theme">
+          {THEME_OPTIONS.map((theme) => (
+            <button
+              type="button"
+              className="themechooser__option"
+              data-theme-preview={theme.id}
+              role="radio"
+              aria-checked={preferences.appearanceTheme === theme.id}
+              key={theme.id}
+              onClick={() => onChange({ ...preferences, appearanceTheme: theme.id })}
+            >
+              <span className="themechooser__preview" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="themechooser__copy">
+                <strong>{theme.name}</strong>
+                <small>{theme.description}</small>
+              </span>
+              <span className="themechooser__check" aria-hidden="true">✓</span>
+            </button>
+          ))}
+        </div>
+        <div className="backgroundchooser">
+          <div className="backgroundchooser__head">
+            <span className="settings__trayLabel">Background</span>
+            <span className="settings__trayDescription">Change the atmosphere, keep the data.</span>
+          </div>
+          <div className="backgroundchooser__options" role="radiogroup" aria-label="Background style">
+            {BACKGROUND_OPTIONS.map((background) => (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={preferences.backgroundStyle === background.id}
+                key={background.id}
+                onClick={() => onChange({ ...preferences, backgroundStyle: background.id })}
+              >
+                <span data-background-preview={background.id} aria-hidden="true" />
+                {background.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <Switch
           label="Compact rows"
           description="Tighter spacing when you track many accounts."

@@ -19,13 +19,19 @@ function base(size: number, className?: string) {
   };
 }
 
-/** App logo: an eye with a quota-arc iris. */
+/** App logo: the EyeUrAI eye and its coral signal glint. */
 export function EyeMark({ size = 18, className }: IconProps) {
   return (
     <svg {...base(size, className)} strokeWidth={1.6}>
       <path d="M1.9 12S5.5 5.4 12 5.4 22.1 12 22.1 12 18.5 18.6 12 18.6 1.9 12 1.9 12Z" />
       <circle cx="12" cy="12" r="3.1" />
       <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+      <path
+        className="eye-mark__spark"
+        d="m18.1 3.1.82 2.18 2.18.82-2.18.82-.82 2.18-.82-2.18-2.18-.82 2.18-.82.82-2.18Z"
+        fill="currentColor"
+        stroke="none"
+      />
     </svg>
   );
 }

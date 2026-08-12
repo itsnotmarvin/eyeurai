@@ -57,7 +57,7 @@ export function Onboarding({ initial, onComplete, requestPermission }: Onboardin
     <div className="onboarding">
       <div className="onboarding__hero">
         <span className="onboarding__logo" aria-hidden="true">
-          <EyeMark size={22} />
+          <EyeMark size={23} />
         </span>
         <h1 className="onboarding__title">
           {step === 0 ? "Which limits should we watch?" : "Tell me before I run out"}

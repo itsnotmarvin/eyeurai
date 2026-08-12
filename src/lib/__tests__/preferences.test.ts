@@ -62,6 +62,22 @@ describe("sanitizePreferences", () => {
     expect(sanitizePreferences({ refreshIntervalSeconds: "15" }).refreshIntervalSeconds).toBe(60);
   });
 
+  it("keeps supported appearance choices and rejects unknown ones", () => {
+    const valid = sanitizePreferences({
+      appearanceTheme: "lichen",
+      backgroundStyle: "photo",
+    });
+    expect(valid.appearanceTheme).toBe("lichen");
+    expect(valid.backgroundStyle).toBe("photo");
+
+    const invalid = sanitizePreferences({
+      appearanceTheme: "generic-blue",
+      backgroundStyle: "wallpaper-url",
+    });
+    expect(invalid.appearanceTheme).toBe("porcelain");
+    expect(invalid.backgroundStyle).toBe("solid");
+  });
+
   it.each([
     undefined,
     "claude-personal::weekly-all",
@@ -167,6 +183,8 @@ describe("storage", () => {
     const raw = readStoredPreferences() ?? "";
     expect(raw).not.toMatch(/token|secret|key|password|credential/i);
     expect(Object.keys(JSON.parse(raw)).sort()).toEqual([
+      "appearanceTheme",
+      "backgroundStyle",
       "compact",
       "criticalThreshold",
       "disconnectedAccounts",
