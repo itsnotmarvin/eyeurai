@@ -1,0 +1,48 @@
+name: Windows installer smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "agent/**"
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release version
+        run: npm run release:check
+
+      - name: Build signed Windows installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles nsis
+
+      - name: Install and launch EyeUrAI
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          ./scripts/windows-smoke.ps1 -Installer "src-tauri/target/release/bundle/nsis/EyeUrAI_${version}_x64-setup.exe"

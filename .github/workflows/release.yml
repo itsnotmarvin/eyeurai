@@ -57,7 +57,7 @@ jobs:
       - name: Lint Rust core
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Build and publish signed release
+      - name: Build signed release draft
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,10 +66,39 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: EyeUrAI v__VERSION__
-          releaseDraft: false
+          # Keep downloads private until every platform builds and the Windows
+          # installer has proved that it can install and launch successfully.
+          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
           retryAttempts: 2
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+      - name: Smoke-test Windows installer
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          ./scripts/windows-smoke.ps1 -Installer "src-tauri/target/release/bundle/nsis/EyeUrAI_${version}_x64-setup.exe"
+
+  publish-release:
+    name: Publish verified release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          gh release edit "v${version}" --draft=false --repo "${GITHUB_REPOSITORY}"

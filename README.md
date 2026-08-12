@@ -8,12 +8,30 @@ EyeUrAI is an open-source, local-first menu-bar and system-tray app for monitori
 
 ## Installation
 
-Download the latest installer from [GitHub Releases](https://github.com/itsnotmarvin/eyeurai/releases/latest):
+Download EyeUrAI only from the [latest GitHub Release](https://github.com/itsnotmarvin/eyeurai/releases/latest). Files ending in `.sig` or `.app.tar.gz`, plus `latest.json`, are used by the automatic updater; you do not need them for a normal installation.
 
-- macOS 11 or newer: choose the Apple silicon (`aarch64`) or Intel (`x64`) DMG.
-- Windows x64: choose the `x64-setup.exe` installer.
+### Download and install on macOS
 
-The current macOS builds use ad-hoc code signing, so macOS may require approval in Privacy & Security after download. The Windows installer is not yet Authenticode-signed and may show a Microsoft Defender SmartScreen warning. Tauri updater artifacts are signed separately so installed copies can verify automatic updates.
+EyeUrAI requires macOS 11 or newer.
+
+1. On the release page, download the DMG that matches your Mac:
+   - **Apple silicon (M1, M2, M3, M4, or newer):** `EyeUrAI_<version>_aarch64.dmg`
+   - **Intel:** `EyeUrAI_<version>_x64.dmg`
+2. Open the downloaded DMG.
+3. Drag **EyeUrAI** into the **Applications** folder.
+4. Open **EyeUrAI** from Applications. The eye icon will appear in the macOS menu bar.
+
+If you are unsure which Mac you have, open **Apple menu → About This Mac** and look for **Chip** (Apple silicon) or **Processor** (Intel).
+
+The current macOS builds use ad-hoc code signing. If macOS blocks the first launch, open **System Settings → Privacy & Security**, confirm that the blocked app is EyeUrAI, and choose **Open Anyway**.
+
+### Download and install on Windows
+
+1. On the release page, download `EyeUrAI_<version>_x64-setup.exe`.
+2. Open the downloaded installer and follow its prompts.
+3. Launch **EyeUrAI** from the Start menu. The eye icon will appear in the Windows system tray; it may be inside the **Show hidden icons** menu (`^`).
+
+The Windows installer is not yet Authenticode-signed, so Microsoft Defender SmartScreen may warn on first launch. Verify that the installer came from this repository's official GitHub Release, then choose **More info → Run anyway** to continue. Tauri updater artifacts are signed separately so installed copies can verify automatic updates.
 
 ### Install from source
 
@@ -50,6 +68,14 @@ npm run desktop:build
 Tauri places the platform installer and app bundle under `src-tauri/target/release/bundle/`. On macOS, open the generated DMG and drag EyeUrAI into Applications. On Windows, run the generated installer.
 
 Development builds started with `npm run desktop:dev` do not check for updates. Install EyeUrAI from GitHub Releases once; that version will show an **Update available** button for later releases.
+
+## Resource use
+
+EyeUrAI is designed to remain lightweight while it sits in the menu bar or system tray. In one macOS idle measurement, the app and its WebKit helper processes averaged about 2% of one CPU core, were usually at 0% CPU between brief updates, and used roughly 50–190 MB of memory depending on how macOS accounted for shared WebKit memory. The installed application was about 7 MB. Actual usage varies by platform, account count, and how often the panel is opened or refreshed.
+
+Quota checks run when the app loads and automatically at the interval selected under **Settings → Usage updates**. The default is once a minute; available intervals range from 15 seconds to 5 minutes. Signed release builds check for app updates only at the intervals described below. Optional local-usage analysis can briefly use additional CPU and disk I/O while reading local Claude Code and Codex session logs.
+
+Building from source is substantially heavier than running the installed app. The first Rust build may use several CPU cores and create several gigabytes of compiler artifacts under `src-tauri/target/`; development mode also keeps the Vite and Rust development processes running. These build artifacts consume disk space, not continuous runtime power, and can be removed with `cargo clean --manifest-path src-tauri/Cargo.toml` when they are no longer needed.
 
 ### Provider sign-in
 

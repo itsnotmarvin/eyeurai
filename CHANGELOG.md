@@ -2,6 +2,13 @@
 
 All notable changes to EyeUrAI are documented in this file.
 
+## 1.2.1 — 2026-08-11
+
+- Refresh live provider usage automatically so pinned menu-bar percentages stay current without manual refreshes.
+- Let users choose a 15-second, 30-second, one-minute, or five-minute refresh interval; changing it refreshes immediately.
+- Add separate macOS and Windows download instructions, including platform-signing warnings and the exact installer to choose.
+- Keep releases private as drafts until the Windows installer successfully installs and launches on a Windows runner.
+
 ## 1.2.0 — 2026-08-11
 
 - Add isolated Claude accounts: sign in additional claude.ai accounts through Anthropic's official browser flow and watch every account's usage side by side, independent of the terminal login.
