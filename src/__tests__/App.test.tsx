@@ -436,6 +436,57 @@ describe("App", () => {
     await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith(null, null));
   });
 
+  it("switches an existing Codex weekly pin to Claude five-hour usage", async () => {
+    const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
+    seedPreferences({
+      pinnedQuota: { accountId: "openai-pro", windowId: "codex-weekly" },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(loadPreferences().pinnedQuota).toEqual({
+        accountId: "claude-personal",
+        windowId: "session",
+      }),
+    );
+    await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith("5h", 62));
+  });
+
+  it("pins a live reset countdown to the menu bar", async () => {
+    const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Pin reset timer for Session (5h) quota for Claude · marbin@hey.com to menu bar",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(loadPreferences().pinnedQuota).toEqual({
+        accountId: "claude-personal",
+        windowId: "session",
+        display: "reset",
+      }),
+    );
+    await waitFor(() =>
+      expect(traySpy).toHaveBeenLastCalledWith(
+        "5h",
+        null,
+        expect.stringMatching(/^\d+(?:h(?: \d+m)?|m|s)$/),
+      ),
+    );
+  });
+
   it("keeps a temporarily unavailable pin while showing the logo", async () => {
     const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
     seedPreferences({ pinnedQuota: { accountId: "missing", windowId: "weekly" } });

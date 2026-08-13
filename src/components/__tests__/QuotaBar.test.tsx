@@ -23,7 +23,12 @@ function makeWindow(overrides: Partial<QuotaWindow> = {}): QuotaWindow {
   };
 }
 
-function renderBar(window: QuotaWindow, isPinned = false, onTogglePin?: () => void) {
+function renderBar(
+  window: QuotaWindow,
+  isPinned = false,
+  onTogglePin?: (display: "usage" | "reset") => void,
+  pinnedDisplay: "usage" | "reset" = "usage",
+) {
   return render(
     <ul>
       <QuotaBar
@@ -33,6 +38,7 @@ function renderBar(window: QuotaWindow, isPinned = false, onTogglePin?: () => vo
         criticalThreshold={90}
         accountName="Claude · work@acme.com"
         isPinned={isPinned}
+        pinnedDisplay={pinnedDisplay}
         onTogglePin={onTogglePin}
       />
     </ul>,
@@ -106,6 +112,21 @@ describe("QuotaBar", () => {
     expect(screen.getByText("Pinned")).toBeInTheDocument();
 
     fireEvent.click(toggle);
-    expect(onTogglePin).toHaveBeenCalledTimes(1);
+    expect(onTogglePin).toHaveBeenCalledWith("usage");
+  });
+
+  it("pins the reset countdown independently from usage", () => {
+    const onTogglePin = vi.fn();
+    const { container } = renderBar(makeWindow(), true, onTogglePin, "reset");
+
+    const timerToggle = screen.getByRole("button", {
+      name: "Unpin reset timer for Session (5h) quota for Claude · work@acme.com from menu bar",
+    });
+    expect(timerToggle).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector(".quota")).toHaveAttribute("data-pinned", "true");
+    expect(screen.getByText("Timer pinned")).toBeInTheDocument();
+
+    fireEvent.click(timerToggle);
+    expect(onTogglePin).toHaveBeenCalledWith("reset");
   });
 });

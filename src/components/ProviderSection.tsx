@@ -2,6 +2,7 @@ import {
   PROVIDER_META,
   type Account,
   type PinnedQuota,
+  type PinnedQuotaDisplay,
   type ProviderId,
 } from "../types/quota";
 import { displayPercent, severityFor } from "../lib/format";
@@ -15,7 +16,11 @@ export interface ProviderSectionProps {
   warnThreshold: number;
   criticalThreshold: number;
   pinnedQuota?: PinnedQuota | null;
-  onToggleQuotaPin?: (accountId: string, windowId: string) => void;
+  onToggleQuotaPin?: (
+    accountId: string,
+    windowId: string,
+    display: PinnedQuotaDisplay,
+  ) => void;
   onRetry?: () => void;
 }
 

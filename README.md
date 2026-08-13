@@ -123,6 +123,18 @@ EyeUrAI has no account system, analytics, telemetry, or hosted backend.
 - Claude accounts added in EyeUrAI are granted a read-only scope, so the stored tokens can read usage but can never run Claude.
 - Removing an EyeUrAI account removes its local configuration.
 
+### Every network connection
+
+The interface itself cannot reach the internet: its content-security policy only allows talking to the local Tauri bridge, and all fonts, icons, and provider logos ship inside the app. Network requests are made only by the Rust backend, using your own credentials, and only to:
+
+- `api.anthropic.com`, `claude.com`, and `platform.claude.com` — Claude usage and sign-in
+- `chatgpt.com` and `auth.openai.com` — Codex usage and sign-in
+- `openrouter.ai` — OpenRouter key status
+- `generativelanguage.googleapis.com` — Gemini connection check
+- GitHub Releases — signed update checks, in installed release builds only
+
+Nothing else is contacted. Because there is no hosted backend, every installation is fully self-contained: your tokens, usage data, and preferences exist only on your machine.
+
 See [SECURITY.md](SECURITY.md) for the security model and reporting process.
 
 ## Platforms

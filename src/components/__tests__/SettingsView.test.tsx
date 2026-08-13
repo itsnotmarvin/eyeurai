@@ -70,4 +70,31 @@ describe("SettingsView", () => {
     });
     expect(onRefreshAccounts).toHaveBeenCalledTimes(1);
   });
+
+  it("can enable launch at login without storing it as an app preference", () => {
+    const setEnabled = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsView
+        preferences={DEFAULT_PREFERENCES}
+        onChange={vi.fn()}
+        mode="live"
+        onRerunSetup={vi.fn()}
+        accounts={[]}
+        onDisconnectAccount={vi.fn()}
+        onReconnectAccount={vi.fn()}
+        onRefreshAccounts={vi.fn()}
+        onRequestLocalUsage={vi.fn()}
+        launchAtLogin={{
+          available: true,
+          enabled: false,
+          busy: false,
+          error: null,
+          setEnabled,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Launch at login" }));
+    expect(setEnabled).toHaveBeenCalledWith(true);
+  });
 });

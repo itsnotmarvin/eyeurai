@@ -83,6 +83,17 @@ export function formatResetCountdown(
   return `resets in ${formatDuration(delta)}`;
 }
 
+/** Compact reset value for the native menu bar, e.g. "2h 14m" or "now". */
+export function menuBarResetCountdown(
+  resetsAt: string | null,
+  now: number,
+): string | null {
+  const target = parseTimestamp(resetsAt);
+  if (target === null) return null;
+  const delta = target - now;
+  return delta <= 0 ? "now" : formatDuration(delta);
+}
+
 /** Relative freshness caption, e.g. "updated 3m ago". */
 export function formatRelativeTime(
   timestamp: string | null,

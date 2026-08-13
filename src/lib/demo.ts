@@ -230,7 +230,7 @@ function buildWindow(seed: WindowSeed, now: number): QuotaWindow {
 }
 
 /** Builds the deterministic demo snapshot for a given wall-clock time. */
-export function createDemoSnapshot(now: number = Date.now()): Snapshot {
+export function createDemoSnapshot(now: number = Date.now(), recording = false): Snapshot {
   // Anchor to the minute so repeated renders produce identical payloads.
   const anchor = Math.floor(now / MINUTE) * MINUTE;
 
@@ -241,7 +241,17 @@ export function createDemoSnapshot(now: number = Date.now()): Snapshot {
     accounts: ACCOUNT_SEEDS.map((seed) => ({
       id: seed.id,
       provider: seed.provider,
-      label: seed.label,
+      // Marketing captures must never expose a developer's real address or
+      // organisation. The ordinary demo stays unchanged for existing tests.
+      label: recording
+        ? seed.provider === "openrouter"
+          ? "personal key"
+          : seed.provider === "gemini"
+            ? "personal account"
+            : seed.id.endsWith("team") || seed.id.endsWith("api")
+              ? "workspace account"
+              : "personal account"
+        : seed.label,
       plan: seed.plan,
       source: seed.source,
       isCliActive: seed.isCliActive,
@@ -269,6 +279,7 @@ export function refreshDemoSnapshot(previous: Snapshot, now: number = Date.now()
       const previousAccount = previous.accounts[accountIndex];
       return {
         ...account,
+        label: previousAccount?.label ?? account.label,
         status: "fresh",
         message: null,
         updatedAt: new Date(now).toISOString(),

@@ -13,7 +13,11 @@ import {
   type ProviderId,
 } from "../types/quota";
 import { REFRESH_INTERVAL_OPTIONS, reconcileThresholds } from "../lib/preferences";
-import { displayPercent, menuBarQuotaLabel } from "../lib/format";
+import {
+  displayPercent,
+  menuBarQuotaLabel,
+  menuBarResetCountdown,
+} from "../lib/format";
 import { ensureNotificationPermission } from "../lib/notify";
 import {
   startClaudeAccountLogin,
@@ -22,12 +26,15 @@ import {
   subscribeToCodexLogin,
 } from "../lib/ipc";
 import { useProfileLogin } from "../hooks/useProfileLogin";
+import type { LaunchAtLoginState } from "../hooks/useLaunchAtLogin";
 import { ProviderMark } from "./ProviderMark";
 import { Switch } from "./controls/Switch";
 import { ThresholdSlider } from "./controls/ThresholdSlider";
 
 export interface SettingsViewProps {
   preferences: Preferences;
+  now?: number;
+  launchAtLogin?: LaunchAtLoginState;
   onChange: (next: Preferences) => void;
   /** "demo" when running outside Tauri with sample data. */
   mode: "live" | "demo";
@@ -137,6 +144,8 @@ function accountSourceLabel(account: Account): string {
 
 export function SettingsView({
   preferences,
+  now = Date.now(),
+  launchAtLogin,
   onChange,
   mode,
   onRerunSetup,
@@ -178,8 +187,15 @@ export function SettingsView({
   const pinnedWindow = preferences.pinnedQuota
     ? pinnedAccount?.windows.find((window) => window.id === preferences.pinnedQuota?.windowId)
     : null;
+  const pinnedReset = pinnedWindow
+    ? menuBarResetCountdown(pinnedWindow.resetsAt, now)
+    : null;
   const pinnedDisplay = pinnedWindow
-    ? `${menuBarQuotaLabel(pinnedWindow)}:${displayPercent(pinnedWindow.percentUsed)}%`
+    ? preferences.pinnedQuota?.display === "reset"
+      ? pinnedReset
+        ? `${menuBarQuotaLabel(pinnedWindow)}:${pinnedReset}`
+        : "Unavailable"
+      : `${menuBarQuotaLabel(pinnedWindow)}:${displayPercent(pinnedWindow.percentUsed)}%`
     : preferences.pinnedQuota
       ? "Unavailable"
       : null;
@@ -351,6 +367,22 @@ export function SettingsView({
       </section>
 
       <section className="settings__section">
+        <h2 className="settings__title">Startup</h2>
+        <Switch
+          label="Launch at login"
+          description="Start quietly in the menu bar when you sign in to this Mac."
+          checked={launchAtLogin?.enabled ?? false}
+          disabled={!launchAtLogin?.available || launchAtLogin.busy}
+          onChange={(enabled) => void launchAtLogin?.setEnabled(enabled)}
+        />
+        {launchAtLogin?.error ? (
+          <p className="settings__warning" role="status">
+            {launchAtLogin.error}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="settings__section">
         <h2 className="settings__title">Alerts</h2>
         <Switch
           label="Desktop notifications"
@@ -438,10 +470,10 @@ export function SettingsView({
             <span className="settings__trayLabel">Menu bar display</span>
             <span className="settings__trayDescription">
               {pinnedWindow && pinnedAccount
-                ? `${PROVIDER_META[pinnedAccount.provider].name} · ${pinnedAccount.label} · ${pinnedWindow.label}`
+                ? `${PROVIDER_META[pinnedAccount.provider].name} · ${pinnedAccount.label} · ${pinnedWindow.label} · ${preferences.pinnedQuota?.display === "reset" ? "reset timer" : "live usage"}`
                 : preferences.pinnedQuota
                   ? "The pinned quota is temporarily unavailable; the logo is showing."
-                  : "Click any quota on Home to pin its live usage."}
+                  : "Click a quota for live usage, or its reset time for a countdown."}
             </span>
           </div>
           <div className="settings__trayOptions" aria-label="Menu bar display">

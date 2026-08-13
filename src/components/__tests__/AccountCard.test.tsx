@@ -146,6 +146,6 @@ describe("AccountCard", () => {
         name: "Pin Session quota for Claude · work@acme.com to menu bar",
       }),
     );
-    expect(onToggleQuotaPin).toHaveBeenCalledWith("claude-1", "session");
+    expect(onToggleQuotaPin).toHaveBeenCalledWith("claude-1", "session", "usage");
   });
 });

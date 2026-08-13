@@ -12,9 +12,14 @@ import { useNow } from "./hooks/useNow";
 import { usePreferences } from "./hooks/usePreferences";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useLaunchAtLogin } from "./hooks/useLaunchAtLogin";
 import { fetchLocalUsage, hideWindow, setTrayDisplay } from "./lib/ipc";
 import { createDemoLocalUsage } from "./lib/demo";
-import { displayPercent, menuBarQuotaLabel } from "./lib/format";
+import {
+  displayPercent,
+  menuBarQuotaLabel,
+  menuBarResetCountdown,
+} from "./lib/format";
 import { computeAlerts, deliverAlerts, type AlertState } from "./lib/notify";
 import { EmptyState } from "./components/EmptyState";
 import { Header } from "./components/Header";
@@ -50,8 +55,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export function App() {
+  const recording =
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("recording");
   const { preferences, replace, update } = usePreferences();
   const appUpdate = useAppUpdate();
+  const launchAtLogin = useLaunchAtLogin();
   const excludedAccountIds = useMemo(
     () => preferences.disconnectedAccounts.map((account) => account.id),
     [preferences.disconnectedAccounts],
@@ -107,23 +117,39 @@ export function App() {
       ? { account, window, windowLabel: menuBarQuotaLabel(window) }
       : null;
   }, [monitoredSnapshot, preferences.pinnedQuota]);
-  const pinnedTrayLabel = pinnedQuotaDetails?.windowLabel ?? null;
+  const pinnedQuotaDisplay = preferences.pinnedQuota?.display ?? "usage";
+  const pinnedTrayReset =
+    pinnedQuotaDetails && pinnedQuotaDisplay === "reset"
+      ? menuBarResetCountdown(pinnedQuotaDetails.window.resetsAt, now)
+      : null;
+  const pinnedTrayLabel =
+    pinnedQuotaDetails && (pinnedQuotaDisplay === "usage" || pinnedTrayReset !== null)
+      ? pinnedQuotaDetails.windowLabel
+      : null;
   const pinnedTrayPercent = pinnedQuotaDetails
     ? displayPercent(pinnedQuotaDetails.window.percentUsed)
     : null;
 
   useEffect(() => {
-    void setTrayDisplay(pinnedTrayLabel, pinnedTrayPercent);
-  }, [pinnedTrayLabel, pinnedTrayPercent]);
+    if (pinnedQuotaDisplay === "reset" && pinnedTrayLabel && pinnedTrayReset) {
+      void setTrayDisplay(pinnedTrayLabel, null, pinnedTrayReset);
+    } else {
+      void setTrayDisplay(pinnedTrayLabel, pinnedTrayLabel ? pinnedTrayPercent : null);
+    }
+  }, [pinnedQuotaDisplay, pinnedTrayLabel, pinnedTrayPercent, pinnedTrayReset]);
 
   const togglePinnedQuota = useCallback(
-    (accountId: string, windowId: string) => {
+    (accountId: string, windowId: string, display: "usage" | "reset") => {
       const current = preferences.pinnedQuota;
       update({
         pinnedQuota:
-          current?.accountId === accountId && current.windowId === windowId
+          current?.accountId === accountId &&
+          current.windowId === windowId &&
+          (current.display ?? "usage") === display
             ? null
-            : { accountId, windowId },
+            : display === "reset"
+              ? { accountId, windowId, display }
+              : { accountId, windowId },
       });
     },
     [preferences.pinnedQuota, update],
@@ -244,6 +270,7 @@ export function App() {
     return (
       <div
         className="app"
+        data-recording={recording ? "true" : undefined}
         data-compact={preferences.compact ? "true" : undefined}
         data-theme={preferences.appearanceTheme}
         data-background={preferences.backgroundStyle}
@@ -264,6 +291,8 @@ export function App() {
     body = (
       <SettingsView
         preferences={preferences}
+        now={now}
+        launchAtLogin={launchAtLogin}
         onChange={replace}
         mode={mode}
         accounts={monitoredSnapshot?.accounts ?? []}
@@ -349,6 +378,7 @@ export function App() {
   return (
     <div
       className="app"
+      data-recording={recording ? "true" : undefined}
       data-compact={preferences.compact ? "true" : undefined}
       data-theme={preferences.appearanceTheme}
       data-background={preferences.backgroundStyle}

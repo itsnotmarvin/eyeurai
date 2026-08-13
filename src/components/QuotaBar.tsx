@@ -1,6 +1,6 @@
 import { memo } from "react";
 
-import type { QuotaWindow } from "../types/quota";
+import type { PinnedQuotaDisplay, QuotaWindow } from "../types/quota";
 import {
   displayPercent,
   formatResetCountdown,
@@ -18,7 +18,8 @@ export interface QuotaBarProps {
   /** Account context so the accessible name is unambiguous. */
   accountName: string;
   isPinned?: boolean;
-  onTogglePin?: () => void;
+  pinnedDisplay?: PinnedQuotaDisplay;
+  onTogglePin?: (display: PinnedQuotaDisplay) => void;
 }
 
 function QuotaBarImpl({
@@ -28,15 +29,21 @@ function QuotaBarImpl({
   criticalThreshold,
   accountName,
   isPinned = false,
+  pinnedDisplay = "usage",
   onTogglePin,
 }: QuotaBarProps) {
   const percent = displayPercent(window.percentUsed);
   const severity = severityFor(window.percentUsed, warnThreshold, criticalThreshold);
   const countdown = formatResetCountdown(window.resetsAt, now);
   const quotaName = window.note ? `${window.label} (${window.note})` : window.label;
-  const pinLabel = isPinned
+  const usagePinned = isPinned && pinnedDisplay === "usage";
+  const resetPinned = isPinned && pinnedDisplay === "reset";
+  const pinLabel = usagePinned
     ? `Unpin ${quotaName} quota for ${accountName} from menu bar`
     : `Pin ${quotaName} quota for ${accountName} to menu bar`;
+  const resetPinLabel = resetPinned
+    ? `Unpin reset timer for ${quotaName} quota for ${accountName} from menu bar`
+    : `Pin reset timer for ${quotaName} quota for ${accountName} to menu bar`;
 
   return (
     <li
@@ -50,7 +57,7 @@ function QuotaBarImpl({
           {window.note ? <span className="quota__note">{window.note}</span> : null}
           <span className="quota__pinState" aria-hidden="true">
             <PinIcon size={10} />
-            {isPinned ? "Pinned" : "Pin"}
+            {resetPinned ? "Timer pinned" : isPinned ? "Pinned" : "Pin"}
           </span>
         </span>
         <span className="quota__percent">{percent}%</span>
@@ -65,22 +72,26 @@ function QuotaBarImpl({
         aria-valuenow={percent}
         aria-valuetext={usageAriaText(window, now)}
       >
-        <span
-          className="quota__threshold"
-          style={{ left: `${warnThreshold}%` }}
-          aria-hidden="true"
-        />
-        <span
-          className="quota__threshold quota__threshold--critical"
-          style={{ left: `${criticalThreshold}%` }}
-          aria-hidden="true"
-        />
         <span className="quota__fill" style={{ width: `${percent}%` }} />
       </div>
 
       <div className="quota__meta">
         <span className="quota__usage">{formatUsage(window)}</span>
-        {countdown ? (
+        {countdown && onTogglePin ? (
+          <button
+            type="button"
+            className="quota__reset quota__resetPin"
+            data-pinned={resetPinned ? "true" : undefined}
+            aria-label={resetPinLabel}
+            aria-pressed={resetPinned}
+            title={resetPinLabel}
+            onClick={() => onTogglePin("reset")}
+          >
+            <ClockIcon size={11} />
+            {countdown}
+            <PinIcon className="quota__resetPinIcon" size={9} />
+          </button>
+        ) : countdown ? (
           <span className="quota__reset">
             <ClockIcon size={11} />
             {countdown}
@@ -94,9 +105,9 @@ function QuotaBarImpl({
           type="button"
           className="quota__pinTarget"
           aria-label={pinLabel}
-          aria-pressed={isPinned}
+          aria-pressed={usagePinned}
           title={pinLabel}
-          onClick={onTogglePin}
+          onClick={() => onTogglePin("usage")}
         />
       ) : null}
     </li>

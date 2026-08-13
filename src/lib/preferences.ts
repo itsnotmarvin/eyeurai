@@ -114,7 +114,9 @@ function sanitizePinnedQuota(value: unknown): Preferences["pinnedQuota"] {
   const accountId = sanitizePinnedQuotaId(candidate.accountId);
   const windowId = sanitizePinnedQuotaId(candidate.windowId);
   if (!accountId || !windowId) return null;
-  return { accountId, windowId };
+  return candidate.display === "reset"
+    ? { accountId, windowId, display: "reset" }
+    : { accountId, windowId };
 }
 
 function sanitizeRefreshInterval(value: unknown): RefreshIntervalSeconds {

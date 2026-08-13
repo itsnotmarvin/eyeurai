@@ -253,10 +253,14 @@ export async function fetchLocalUsage(days: number = 7): Promise<LocalUsageSnaps
 export async function setTrayDisplay(
   windowLabel: string | null,
   percentUsed: number | null,
+  resetCountdown?: string | null,
 ): Promise<void> {
   await invokeAny<unknown>("tray-display", TRAY_DISPLAY_COMMANDS, {
     windowLabel,
     percentUsed,
+    // Tauri's generated command wrapper requires every declared argument key,
+    // including Rust `Option` values. Always send null for ordinary usage pins.
+    resetCountdown: resetCountdown ?? null,
   });
 }
 

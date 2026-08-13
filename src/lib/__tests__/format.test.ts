@@ -8,6 +8,7 @@ import {
   formatResetCountdown,
   formatUsage,
   menuBarQuotaLabel,
+  menuBarResetCountdown,
   severityFor,
   usageAriaText,
 } from "../format";
@@ -76,6 +77,14 @@ describe("menuBarQuotaLabel", () => {
 
   it("does not put verbose provider notes in the menu bar", () => {
     expect(menuBarQuotaLabel(makeWindow({ kind: "credit", note: "$18.40 left" }))).toBe("Cr");
+  });
+});
+
+describe("menuBarResetCountdown", () => {
+  it("formats a live reset value without the sentence prefix", () => {
+    expect(menuBarResetCountdown(new Date(NOW + 10 * 60_000).toISOString(), NOW)).toBe("10m");
+    expect(menuBarResetCountdown(new Date(NOW - 1).toISOString(), NOW)).toBe("now");
+    expect(menuBarResetCountdown(null, NOW)).toBeNull();
   });
 });
 

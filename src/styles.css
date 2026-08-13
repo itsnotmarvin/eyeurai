@@ -117,6 +117,24 @@ input {
   padding: 0;
 }
 
+/* Isolated marketing-capture stage. It intentionally contains no browser UI,
+   desktop content or live account data; the 16:9 crop is added in post. */
+.app[data-recording="true"] {
+  display: grid;
+  place-items: center;
+  padding: 52px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(241, 132, 98, 0.13), transparent 28%),
+    radial-gradient(circle at 18% 16%, rgba(167, 139, 250, 0.08), transparent 24%),
+    linear-gradient(145deg, #0c0c0d 0%, #151313 55%, #0b0b0c 100%);
+}
+
+.app[data-recording="true"] .app__frame {
+  width: 430px;
+  height: 680px;
+  transform: scale(1.15);
+}
+
 .app__frame {
   position: relative;
   display: flex;
@@ -297,36 +315,6 @@ input {
   font-size: 11.5px;
 }
 
-.statusbar__dot {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
-}
-
-.statusbar[data-severity="warn"] .statusbar__dot {
-  background: var(--warn);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
-}
-
-.statusbar[data-severity="critical"] .statusbar__dot {
-  background: var(--critical);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--critical) 22%, transparent);
-  animation: pulse 2.4s var(--ease) infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--critical) 22%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 5px color-mix(in srgb, var(--critical) 8%, transparent);
-  }
-}
-
 .statusbar__text {
   display: flex;
   align-items: baseline;
@@ -365,10 +353,12 @@ input {
   border: 0.5px solid var(--hairline-strong);
   background: var(--surface-1);
   color: var(--text-2);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-family: "American Typewriter", "Courier New", serif;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: none;
 }
 
 /* =========================================================================
@@ -609,53 +599,60 @@ input {
   letter-spacing: 0.1px;
 }
 
-.account__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
+.account__statusMark {
+  display: inline-grid;
+  width: 8px;
+  height: 10px;
+  place-items: center;
+  color: currentColor;
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.account__status[data-status="fresh"] .account__dot {
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent);
+.account__statusMark::before {
+  content: "|";
 }
 
 .account__status[data-retained="true"] {
   color: #e6c48a;
 }
 
-.account__status[data-retained="true"] .account__dot {
-  background: var(--warn);
-  box-shadow: none;
+.account__status[data-retained="true"] .account__statusMark {
+  width: 11px;
+}
+
+.account__status[data-retained="true"] .account__statusMark::before {
+  content: "//";
+  letter-spacing: -2px;
 }
 
 .account__status[data-status="stale"] {
   color: #e6c48a;
 }
-.account__status[data-status="stale"] .account__dot {
-  background: var(--warn);
+.account__status[data-status="stale"] .account__statusMark {
+  width: 11px;
+}
+
+.account__status[data-status="stale"] .account__statusMark::before {
+  content: "//";
+  letter-spacing: -2px;
 }
 
 .account__status[data-status="error"] {
   color: #ffada4;
 }
-.account__status[data-status="error"] .account__dot {
-  background: var(--critical);
+.account__status[data-status="error"] .account__statusMark::before {
+  content: "×";
 }
 
-.account__status[data-status="pending"] .account__dot {
-  background: var(--text-3);
-  animation: blink 1.4s var(--ease) infinite;
+.account__status[data-status="pending"] .account__statusMark {
+  width: 12px;
 }
 
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
+.account__status[data-status="pending"] .account__statusMark::before {
+  content: "…";
 }
 
 .account__quotas {
@@ -887,6 +884,42 @@ input {
   gap: 3px;
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.quota__resetPin {
+  position: relative;
+  z-index: 4;
+  padding: 1px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: inherit;
+  cursor: default;
+}
+
+.quota__resetPin:hover,
+.quota__resetPin:focus-visible,
+.quota__resetPin[data-pinned="true"] {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.quota__resetPin:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--accent) 72%, #ffffff 28%);
+  outline-offset: 1px;
+}
+
+.quota__resetPinIcon {
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.quota__resetPin:hover .quota__resetPinIcon,
+.quota__resetPin:focus-visible .quota__resetPinIcon,
+.quota__resetPin[data-pinned="true"] .quota__resetPinIcon {
+  opacity: 1;
 }
 
 .quota__reset--none {
@@ -2797,13 +2830,18 @@ input {
 .app[data-theme="carbon"] .quota__track {
   height: 7px;
   border-radius: 1px;
-  background: repeating-linear-gradient(90deg, rgba(239, 237, 232, 0.11) 0 8px, transparent 8px 10px);
+  background: rgba(239, 237, 232, 0.11);
 }
 
 .app[data-theme="carbon"] .quota__fill {
   border-radius: 1px;
-  background: var(--accent);
-  background-image: repeating-linear-gradient(90deg, transparent 0 8px, rgba(19, 19, 19, 0.55) 8px 10px);
+}
+
+/* Marketing capture typography is deliberately clearer at social-video scale. */
+.app[data-recording="true"] {
+  --font-ui: "Manrope Variable", Manrope, sans-serif;
+  --font-display: "Manrope Variable", Manrope, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .app[data-theme="carbon"] .quota__percent,

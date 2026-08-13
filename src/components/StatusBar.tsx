@@ -69,7 +69,6 @@ export function StatusBar({
 
   return (
     <div className="statusbar" data-severity={headline.severity}>
-      <span className="statusbar__dot" aria-hidden="true" />
       <p className="statusbar__text">
         <span className="statusbar__headline">{headline.text}</span>
         {headline.detail ? <span className="statusbar__detail">{headline.detail}</span> : null}

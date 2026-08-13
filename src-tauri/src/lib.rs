@@ -46,8 +46,15 @@ fn sanitize_tray_label(raw_label: &str) -> Option<String> {
     (!label.is_empty()).then_some(label)
 }
 
-fn format_tray_title(window_label: Option<&str>, percent_used: Option<f64>) -> Option<String> {
+fn format_tray_title(
+    window_label: Option<&str>,
+    percent_used: Option<f64>,
+    reset_countdown: Option<&str>,
+) -> Option<String> {
     let label = sanitize_tray_label(window_label?)?;
+    if let Some(countdown) = reset_countdown.and_then(sanitize_tray_label) {
+        return Some(format!("{label}:{countdown}"));
+    }
     let usage = percent_used
         .filter(|value| value.is_finite())
         .map(|value| format!("{}%", value.clamp(0.0, 100.0).round() as u8))
@@ -120,12 +127,17 @@ fn set_tray_display(
     app: tauri::AppHandle,
     window_label: Option<String>,
     percent_used: Option<f64>,
+    reset_countdown: Option<String>,
 ) -> Result<(), String> {
     let tray = app
         .tray_by_id("eyeurai-tray")
         .ok_or_else(|| "the EyeUrAI menu-bar item is unavailable".to_string())?;
 
-    if let Some(title) = format_tray_title(window_label.as_deref(), percent_used) {
+    if let Some(title) = format_tray_title(
+        window_label.as_deref(),
+        percent_used,
+        reset_countdown.as_deref(),
+    ) {
         #[cfg(target_os = "macos")]
         tray.set_icon(None).map_err(|error| error.to_string())?;
         tray.set_title(Some(&title))
@@ -150,12 +162,17 @@ fn set_tray_display(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let launched_hidden = std::env::args_os().any(|argument| argument == "--hidden");
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build());
 
     #[cfg(desktop)]
     let builder = builder
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
 
@@ -170,7 +187,7 @@ pub fn run() {
             local_usage::scan_local_usage,
             set_tray_display,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -232,6 +249,10 @@ pub fn run() {
                         let _ = hide_window.hide();
                     }
                 });
+                if !launched_hidden {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
 
             Ok(())
@@ -247,11 +268,11 @@ mod tests {
     #[test]
     fn tray_title_uses_the_selected_window_label() {
         assert_eq!(
-            format_tray_title(Some("5h"), Some(61.6)),
+            format_tray_title(Some("5h"), Some(61.6), None),
             Some("5h:62%".to_string())
         );
         assert_eq!(
-            format_tray_title(Some("Wk"), Some(42.5)),
+            format_tray_title(Some("Wk"), Some(42.5), None),
             Some("Wk:43%".to_string())
         );
     }
@@ -259,11 +280,11 @@ mod tests {
     #[test]
     fn tray_title_clamps_finite_percentages() {
         assert_eq!(
-            format_tray_title(Some("5h"), Some(-12.0)),
+            format_tray_title(Some("5h"), Some(-12.0), None),
             Some("5h:0%".to_string())
         );
         assert_eq!(
-            format_tray_title(Some("Wk"), Some(140.0)),
+            format_tray_title(Some("Wk"), Some(140.0), None),
             Some("Wk:100%".to_string())
         );
     }
@@ -271,15 +292,15 @@ mod tests {
     #[test]
     fn tray_title_uses_a_dash_for_an_unavailable_percentage() {
         assert_eq!(
-            format_tray_title(Some("Wk"), None),
+            format_tray_title(Some("Wk"), None, None),
             Some("Wk:—".to_string())
         );
         assert_eq!(
-            format_tray_title(Some("Wk"), Some(f64::NAN)),
+            format_tray_title(Some("Wk"), Some(f64::NAN), None),
             Some("Wk:—".to_string())
         );
         assert_eq!(
-            format_tray_title(Some("Wk"), Some(f64::INFINITY)),
+            format_tray_title(Some("Wk"), Some(f64::INFINITY), None),
             Some("Wk:—".to_string())
         );
     }
@@ -297,8 +318,20 @@ mod tests {
     }
 
     #[test]
+    fn tray_title_can_show_a_reset_countdown() {
+        assert_eq!(
+            format_tray_title(Some("5h"), None, Some("10m")),
+            Some("5h:10m".to_string())
+        );
+        assert_eq!(
+            format_tray_title(Some("Wk"), Some(87.0), Some("2h 14m")),
+            Some("Wk:2h 14m".to_string())
+        );
+    }
+
+    #[test]
     fn absent_or_empty_label_selects_the_logo() {
-        assert_eq!(format_tray_title(None, Some(62.0)), None);
-        assert_eq!(format_tray_title(Some(" \n:%🔥 "), Some(62.0)), None);
+        assert_eq!(format_tray_title(None, Some(62.0), None), None);
+        assert_eq!(format_tray_title(Some(" \n:%🔥 "), Some(62.0), None), None);
     }
 }

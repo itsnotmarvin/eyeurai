@@ -155,9 +155,13 @@ export interface DisconnectedAccount {
 }
 
 /** Stable, non-secret reference to the exact quota shown in the macOS menu bar. */
+export type PinnedQuotaDisplay = "usage" | "reset";
+
 export interface PinnedQuota {
   accountId: string;
   windowId: string;
+  /** Omitted for legacy/current usage pins; reset pins opt into the countdown. */
+  display?: PinnedQuotaDisplay;
 }
 
 export type RefreshIntervalSeconds = 15 | 30 | 60 | 300;

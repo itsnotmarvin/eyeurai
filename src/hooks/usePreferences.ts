@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Preferences } from "../types/quota";
-import { loadPreferences, sanitizePreferences, savePreferences } from "../lib/preferences";
+import {
+  DEFAULT_PREFERENCES,
+  loadPreferences,
+  sanitizePreferences,
+  savePreferences,
+} from "../lib/preferences";
 
 export interface PreferencesController {
   preferences: Preferences;
@@ -12,6 +17,18 @@ export interface PreferencesController {
 }
 
 function loadInitialPreferences(): Preferences {
+  if (
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("recording")
+  ) {
+    return {
+      ...DEFAULT_PREFERENCES,
+      onboardingCompleted: true,
+      appearanceTheme: "carbon",
+      backgroundStyle: "gradient",
+    };
+  }
   const preferences = loadPreferences();
   if (
     import.meta.env.DEV &&

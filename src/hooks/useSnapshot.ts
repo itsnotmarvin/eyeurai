@@ -43,6 +43,10 @@ export function useSnapshot(
   autoRefreshIntervalMs: number = AUTO_REFRESH_INTERVAL_MS,
 ): SnapshotController {
   const live = isTauri();
+  const recording =
+    !live &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("recording");
   const exclusionsKey = [...excludedAccountIds].sort().join("\u0000");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [phase, setPhase] = useState<SnapshotPhase>("loading");
@@ -90,13 +94,15 @@ export function useSnapshot(
           const previous = snapshotRef.current;
           // Background polls must not undo demo drift; only manual refreshes move.
           if (!options.manual) {
-            if (!previous) apply(createDemoSnapshot(Date.now()));
+            if (!previous) apply(createDemoSnapshot(Date.now(), recording));
             return;
           }
           // Keep a visible beat so the refresh affordance reads as real.
           await new Promise((resolve) => setTimeout(resolve, 420));
           apply(
-            previous ? refreshDemoSnapshot(previous, Date.now()) : createDemoSnapshot(Date.now()),
+            previous
+              ? refreshDemoSnapshot(previous, Date.now())
+              : createDemoSnapshot(Date.now(), recording),
           );
           return;
         }
@@ -122,7 +128,7 @@ export function useSnapshot(
         if (mounted.current && queued) void loadRef.current(queued);
       }
     },
-    [apply, exclusionsKey, live],
+    [apply, exclusionsKey, live, recording],
   );
   loadRef.current = load;
 

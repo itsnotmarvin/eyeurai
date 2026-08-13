@@ -55,6 +55,28 @@ describe("sanitizePreferences", () => {
     ).toEqual({ accountId: "claude-personal", windowId: "weekly-all" });
   });
 
+  it("keeps reset countdown pins while legacy usage pins remain unchanged", () => {
+    expect(
+      sanitizePreferences({
+        pinnedQuota: {
+          accountId: "claude-personal",
+          windowId: "session",
+          display: "reset",
+        },
+      }).pinnedQuota,
+    ).toEqual({ accountId: "claude-personal", windowId: "session", display: "reset" });
+
+    expect(
+      sanitizePreferences({
+        pinnedQuota: {
+          accountId: "claude-personal",
+          windowId: "session",
+          display: "made-up",
+        },
+      }).pinnedQuota,
+    ).toEqual({ accountId: "claude-personal", windowId: "session" });
+  });
+
   it("accepts only supported automatic refresh intervals", () => {
     expect(sanitizePreferences({ refreshIntervalSeconds: 15 }).refreshIntervalSeconds).toBe(15);
     expect(sanitizePreferences({ refreshIntervalSeconds: 300 }).refreshIntervalSeconds).toBe(300);

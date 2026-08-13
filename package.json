@@ -1,7 +1,7 @@
 {
   "name": "eyeurai",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.2",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/itsnotmarvin/eyeurai.git"
@@ -32,6 +32,7 @@
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-store": "2.4.4",

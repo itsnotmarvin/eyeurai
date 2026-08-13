@@ -5,6 +5,7 @@ import {
   type Account,
   type AuthSource,
   type PinnedQuota,
+  type PinnedQuotaDisplay,
 } from "../types/quota";
 import { formatRelativeTime } from "../lib/format";
 import { AlertIcon, RefreshIcon } from "./Icons";
@@ -45,7 +46,11 @@ export interface AccountCardProps {
   warnThreshold: number;
   criticalThreshold: number;
   pinnedQuota?: PinnedQuota | null;
-  onToggleQuotaPin?: (accountId: string, windowId: string) => void;
+  onToggleQuotaPin?: (
+    accountId: string,
+    windowId: string,
+    display: PinnedQuotaDisplay,
+  ) => void;
   onRetry?: () => void;
 }
 
@@ -84,7 +89,7 @@ function AccountCardImpl({
           data-status={account.status}
           data-retained={retainedCliAccount ? "true" : undefined}
         >
-          <span className="account__dot" aria-hidden="true" />
+          <span className="account__statusMark" aria-hidden="true" />
           {statusLabel(account)}
         </span>
       </header>
@@ -102,9 +107,14 @@ function AccountCardImpl({
               isPinned={
                 pinnedQuota?.accountId === account.id && pinnedQuota.windowId === window.id
               }
+              pinnedDisplay={
+                pinnedQuota?.accountId === account.id && pinnedQuota.windowId === window.id
+                  ? (pinnedQuota.display ?? "usage")
+                  : undefined
+              }
               onTogglePin={
                 onToggleQuotaPin
-                  ? () => onToggleQuotaPin(account.id, window.id)
+                  ? (display) => onToggleQuotaPin(account.id, window.id, display)
                   : undefined
               }
             />

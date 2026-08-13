@@ -41,6 +41,57 @@ function updateInfo(update: PendingUpdate): AppUpdateInfo {
   };
 }
 
+interface ParsedVersion {
+  core: [number, number, number];
+  prerelease: string[];
+}
+
+function parseVersion(version: string): ParsedVersion | null {
+  const match = version.trim().match(
+    /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+  );
+  if (!match) return null;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4]?.split(".") ?? [],
+  };
+}
+
+/** Returns true only when candidate is a valid semantic version newer than current. */
+export function isNewerAppVersion(candidate: string, current: string): boolean {
+  const next = parseVersion(candidate);
+  const installed = parseVersion(current);
+  if (!next || !installed) return false;
+
+  for (let index = 0; index < next.core.length; index += 1) {
+    if (next.core[index] !== installed.core[index]) {
+      return next.core[index] > installed.core[index];
+    }
+  }
+
+  if (next.prerelease.length === 0 || installed.prerelease.length === 0) {
+    return next.prerelease.length === 0 && installed.prerelease.length > 0;
+  }
+
+  const length = Math.max(next.prerelease.length, installed.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const candidatePart = next.prerelease[index];
+    const currentPart = installed.prerelease[index];
+    if (candidatePart === undefined) return false;
+    if (currentPart === undefined) return true;
+    if (candidatePart === currentPart) continue;
+
+    const candidateNumber = /^\d+$/.test(candidatePart) ? Number(candidatePart) : null;
+    const currentNumber = /^\d+$/.test(currentPart) ? Number(currentPart) : null;
+    if (candidateNumber !== null && currentNumber !== null) return candidateNumber > currentNumber;
+    if (candidateNumber !== null) return false;
+    if (currentNumber !== null) return true;
+    return candidatePart > currentPart;
+  }
+
+  return false;
+}
+
 /** Checks the signed release feed. Browser previews and development builds never make a request. */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
   if (!isTauri() || import.meta.env.DEV) return null;
@@ -49,6 +100,10 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
   const { check } = await import("@tauri-apps/plugin-updater");
   const update = await check({ timeout: 15_000 });
   if (!update) return null;
+  if (!isNewerAppVersion(update.version, update.currentVersion)) {
+    await update.close();
+    return null;
+  }
   pendingUpdate = update;
   return updateInfo(update);
 }
