@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../App";
+import * as demo from "../lib/demo";
 import * as ipc from "../lib/ipc";
 import {
   DEFAULT_PREFERENCES,
@@ -487,6 +488,46 @@ describe("App", () => {
     );
   });
 
+  it("keeps a reset pin visible when the provider temporarily omits that window", async () => {
+    const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
+    vi.spyOn(demo, "refreshDemoSnapshot").mockImplementation((snapshot, now) => ({
+      ...snapshot,
+      generatedAt: new Date(now ?? Date.now()).toISOString(),
+      accounts: snapshot.accounts.map((account) =>
+        account.id === "claude-personal"
+          ? { ...account, windows: account.windows.filter((window) => window.id !== "session") }
+          : account,
+      ),
+    }));
+    seedPreferences({
+      pinnedQuota: { accountId: "claude-personal", windowId: "session", display: "reset" },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    await waitFor(() =>
+      expect(traySpy).toHaveBeenLastCalledWith(
+        "5h",
+        null,
+        expect.stringMatching(/^\d+(?:h(?: \d+m)?|m|s)$/),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh quotas" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Unpin reset timer for Session (5h) quota for Claude · marbin@hey.com from menu bar",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+
+    expect(traySpy).toHaveBeenLastCalledWith(
+      "5h",
+      null,
+      expect.stringMatching(/^\d+(?:h(?: \d+m)?|m|s)$/),
+    );
+  });
+
   it("keeps a temporarily unavailable pin while showing the logo", async () => {
     const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
     seedPreferences({ pinnedQuota: { accountId: "missing", windowId: "weekly" } });
@@ -513,7 +554,7 @@ describe("App", () => {
     await waitFor(() => expect(loadPreferences().pinnedQuota).toBeNull());
   });
 
-  it("does not present a retained stale quota as live in the menu bar", async () => {
+  it("keeps a stale pin labelled without presenting its percentage as live", async () => {
     const traySpy = vi.spyOn(ipc, "setTrayDisplay").mockResolvedValue();
     seedPreferences({
       pinnedQuota: { accountId: "claude-team", windowId: "session" },
@@ -522,7 +563,7 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Claude" });
 
-    await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith(null, null));
+    await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith("5h", null));
     expect(loadPreferences().pinnedQuota).toEqual({
       accountId: "claude-team",
       windowId: "session",

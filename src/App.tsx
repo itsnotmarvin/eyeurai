@@ -83,6 +83,11 @@ export function App() {
   );
   const alertState = useRef<AlertState>({});
   const scrollRef = useRef<HTMLElement | null>(null);
+  const pinnedTrayCache = useRef<{
+    key: string;
+    windowLabel: string;
+    resetsAt: string | null;
+  } | null>(null);
 
   const monitoredSnapshot = useMemo(() => {
     if (!snapshot) return null;
@@ -113,34 +118,61 @@ export function App() {
     if (!pinned || !monitoredSnapshot) return null;
     const account = monitoredSnapshot.accounts.find((candidate) => candidate.id === pinned.accountId);
     const window = account?.windows.find((candidate) => candidate.id === pinned.windowId);
-    return account && window && account.status === "fresh"
+    return account && window
       ? { account, window, windowLabel: menuBarQuotaLabel(window) }
       : null;
   }, [monitoredSnapshot, preferences.pinnedQuota]);
+  const pinnedQuotaKey = preferences.pinnedQuota
+    ? `${preferences.pinnedQuota.accountId}\u0000${preferences.pinnedQuota.windowId}`
+    : null;
+  const cachedPinnedTray =
+    pinnedQuotaKey && pinnedTrayCache.current?.key === pinnedQuotaKey
+      ? pinnedTrayCache.current
+      : null;
+  // Providers can briefly omit a rolling window after it resets. Retain its
+  // non-secret label and reset instant so the native item does not disappear
+  // while the next live window is being established.
+  const pinnedTrayWindowLabel =
+    pinnedQuotaDetails?.windowLabel ?? cachedPinnedTray?.windowLabel ?? null;
+  const pinnedTrayResetsAt = pinnedQuotaDetails
+    ? pinnedQuotaDetails.window.resetsAt
+    : (cachedPinnedTray?.resetsAt ?? null);
+  const pinnedQuotaFresh = pinnedQuotaDetails?.account.status === "fresh";
   const pinnedQuotaDisplay = preferences.pinnedQuota?.display ?? "usage";
   const pinnedTrayReset =
-    pinnedQuotaDetails && pinnedQuotaDisplay === "reset"
-      ? menuBarResetCountdown(pinnedQuotaDetails.window.resetsAt, now)
+    pinnedTrayWindowLabel && pinnedQuotaDisplay === "reset"
+      ? menuBarResetCountdown(pinnedTrayResetsAt, now)
       : null;
-  const pinnedTrayLabel =
-    pinnedQuotaDetails && (pinnedQuotaDisplay === "usage" || pinnedTrayReset !== null)
-      ? pinnedQuotaDetails.windowLabel
-      : null;
-  const pinnedTrayPercent = pinnedQuotaDetails
+  const pinnedTrayPercent = pinnedQuotaDetails && pinnedQuotaFresh
     ? displayPercent(pinnedQuotaDetails.window.percentUsed)
     : null;
 
   useEffect(() => {
-    if (pinnedQuotaDisplay === "reset" && pinnedTrayLabel && pinnedTrayReset) {
-      void setTrayDisplay(pinnedTrayLabel, null, pinnedTrayReset);
+    if (!pinnedQuotaKey) {
+      pinnedTrayCache.current = null;
+    } else if (pinnedQuotaDetails) {
+      pinnedTrayCache.current = {
+        key: pinnedQuotaKey,
+        windowLabel: pinnedQuotaDetails.windowLabel,
+        resetsAt: pinnedQuotaDetails.window.resetsAt,
+      };
+    }
+  }, [pinnedQuotaDetails, pinnedQuotaKey]);
+
+  useEffect(() => {
+    if (pinnedQuotaDisplay === "reset" && pinnedTrayWindowLabel && pinnedTrayReset) {
+      void setTrayDisplay(pinnedTrayWindowLabel, null, pinnedTrayReset);
     } else {
-      void setTrayDisplay(pinnedTrayLabel, pinnedTrayLabel ? pinnedTrayPercent : null);
+      void setTrayDisplay(
+        pinnedTrayWindowLabel,
+        pinnedTrayWindowLabel ? pinnedTrayPercent : null,
+      );
     }
   }, [
     pinnedQuotaDisplay,
     preferences.pinnedQuota?.accountId,
     preferences.pinnedQuota?.windowId,
-    pinnedTrayLabel,
+    pinnedTrayWindowLabel,
     pinnedTrayPercent,
     pinnedTrayReset,
   ]);
