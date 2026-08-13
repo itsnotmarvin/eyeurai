@@ -136,7 +136,14 @@ export function App() {
     } else {
       void setTrayDisplay(pinnedTrayLabel, pinnedTrayLabel ? pinnedTrayPercent : null);
     }
-  }, [pinnedQuotaDisplay, pinnedTrayLabel, pinnedTrayPercent, pinnedTrayReset]);
+  }, [
+    pinnedQuotaDisplay,
+    preferences.pinnedQuota?.accountId,
+    preferences.pinnedQuota?.windowId,
+    pinnedTrayLabel,
+    pinnedTrayPercent,
+    pinnedTrayReset,
+  ]);
 
   const togglePinnedQuota = useCallback(
     (accountId: string, windowId: string, display: "usage" | "reset") => {
