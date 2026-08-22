@@ -407,10 +407,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build EyeUrAI")
-        .run(|app, event| {
+        .run(|_app, _event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app.get_webview_window("main") {
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(window) = _app.get_webview_window("main") {
                     summon_window(&window);
                 }
             }
