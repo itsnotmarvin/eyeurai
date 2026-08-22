@@ -7,13 +7,17 @@
 //! the webview cannot alter it before asking the backend to act.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use crate::models::{
     ProviderErrorInfo, ProviderErrorKind, ProviderId, QuotaSnapshot, RemediationChoice,
@@ -312,6 +316,9 @@ pub fn open_terminal(provider: ProviderId, app_data_dir: &Path) -> Result<&'stat
     if command.is_empty() {
         return Err("This provider does not have a terminal sign-in action.".to_string());
     }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = app_data_dir;
 
     #[cfg(target_os = "macos")]
     {
