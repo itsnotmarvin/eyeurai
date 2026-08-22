@@ -70,4 +70,18 @@ describe("useSnapshot", () => {
     expect(requestRefresh).toHaveBeenCalledTimes(1);
     expect(result.current.refreshing).toBe(false);
   });
+
+  it("shows an error instead of fabricating demo accounts when live IPC returns nothing", async () => {
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    vi.spyOn(ipc, "fetchSnapshot").mockResolvedValue(null);
+    vi.spyOn(ipc, "subscribeToSnapshots").mockResolvedValue(() => {});
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+
+    const { result } = renderHook(() => useSnapshot());
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+
+    expect(result.current.mode).toBe("live");
+    expect(result.current.snapshot).toBeNull();
+    expect(result.current.error).toMatch(/local agent/i);
+  });
 });

@@ -26,6 +26,7 @@ import {
   subscribeToCodexLogin,
 } from "../lib/ipc";
 import { useProfileLogin } from "../hooks/useProfileLogin";
+import { useModalDialog } from "../hooks/useModalDialog";
 import type { LaunchAtLoginState } from "../hooks/useLaunchAtLogin";
 import { ProviderMark } from "./ProviderMark";
 import { Switch } from "./controls/Switch";
@@ -154,12 +155,13 @@ export function SettingsView({
   onReconnectAccount,
   onRefreshAccounts,
   onRequestLocalUsage,
-  appVersion = "1.0.0",
+  appVersion = "unknown",
   requestPermission,
 }: SettingsViewProps) {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectProvider, setConnectProvider] = useState<ProviderId | null>(null);
+  const connectDialogRef = useModalDialog(connectOpen, () => setConnectOpen(false));
   const codexFlow = useProfileLogin({
     start: startCodexAccountLogin,
     subscribe: subscribeToCodexLogin,
@@ -527,7 +529,13 @@ export function SettingsView({
       </section>
 
       {connectOpen ? (
-        <div className="connectsheet" role="dialog" aria-modal="true" aria-label="Add account">
+        <div
+          className="connectsheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add account"
+          ref={connectDialogRef}
+        >
           <div className="connectsheet__card">
             <div className="connectsheet__head">
               <div>

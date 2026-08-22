@@ -1,4 +1,5 @@
 import type { AppUpdateInfo, AppUpdateProgress } from "../lib/appUpdates";
+import { useModalDialog } from "../hooks/useModalDialog";
 
 export interface UpdateDialogProps {
   info: AppUpdateInfo;
@@ -25,9 +26,16 @@ export function UpdateDialog({
 }: UpdateDialogProps) {
   const busy = progress !== null;
   const progressValue = progress?.percent ?? undefined;
+  const dialogRef = useModalDialog(true, busy ? undefined : onClose);
 
   return (
-    <div className="connectsheet" role="dialog" aria-modal="true" aria-label="EyeUrAI update">
+    <div
+      className="connectsheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="EyeUrAI update"
+      ref={dialogRef}
+    >
       <div className="connectsheet__card updatedialog">
         <div className="connectsheet__head">
           <div>

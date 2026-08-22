@@ -36,11 +36,7 @@ impl GeminiProvider {
             supports_percent: false,
             supports_reset_times: false,
             supports_currency: false,
-            credential_kinds: vec![
-                CredentialKind::Env,
-                CredentialKind::Keychain,
-                CredentialKind::AppStore,
-            ],
+            credential_kinds: vec![CredentialKind::Env, CredentialKind::Keychain],
             option_keys: vec![CapabilityOption::new(
                 "project_id",
                 "Google Cloud project ID",

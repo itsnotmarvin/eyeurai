@@ -129,10 +129,11 @@ impl QuotaProvider for ClaudeProvider {
                 return not_configured(ClaudeProvider::capability_info(), LOGIN_HINT);
             }
 
-            let mut results = Vec::with_capacity(accounts.len());
-            for (index, descriptor) in accounts.iter().enumerate() {
-                results.push(fetch_one(ctx, descriptor, index == 0).await);
-            }
+            let mut results =
+                super::fetch_accounts_concurrently(accounts, |descriptor, is_primary| {
+                    fetch_one(ctx, descriptor, is_primary)
+                })
+                .await;
             // A user may add the same account that their terminal login
             // happens to use. Prefer the independently managed profile in
             // that case, while retaining every distinct managed profile.
@@ -180,11 +181,8 @@ async fn fetch_one(
             } else {
                 err.with_remediation(login_hint)
             };
-            let mut snapshot = AccountSnapshot::failed(
-                descriptor.id.clone(),
-                fallback_label,
-                err.to_info(),
-            );
+            let mut snapshot =
+                AccountSnapshot::failed(descriptor.id.clone(), fallback_label, err.to_info());
             snapshot.active = is_active;
             return snapshot;
         }

@@ -40,11 +40,7 @@ impl OpenRouterProvider {
             supports_percent: true,
             supports_reset_times: true,
             supports_currency: true,
-            credential_kinds: vec![
-                CredentialKind::Env,
-                CredentialKind::Keychain,
-                CredentialKind::AppStore,
-            ],
+            credential_kinds: vec![CredentialKind::Env, CredentialKind::Keychain],
             option_keys: vec![],
             notes: vec![
                 "Usage and limits apply to the connected API key, not every key in the OpenRouter account."
@@ -82,10 +78,10 @@ impl QuotaProvider for OpenRouterProvider {
                 return not_configured(Self::capability_info(), CONNECT_HINT);
             }
 
-            let mut results = Vec::with_capacity(accounts.len());
-            for (index, descriptor) in accounts.iter().enumerate() {
-                results.push(fetch_one(ctx, descriptor, index == 0).await);
-            }
+            let results = super::fetch_accounts_concurrently(accounts, |descriptor, is_primary| {
+                fetch_one(ctx, descriptor, is_primary)
+            })
+            .await;
 
             let mut snapshot =
                 ProviderSnapshot::new(Self::capability_info()).with_accounts(results);

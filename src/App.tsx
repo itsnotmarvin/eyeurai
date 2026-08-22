@@ -13,7 +13,7 @@ import { usePreferences } from "./hooks/usePreferences";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useLaunchAtLogin } from "./hooks/useLaunchAtLogin";
-import { fetchLocalUsage, hideWindow, setTrayDisplay } from "./lib/ipc";
+import { fetchLocalUsage, hideWindow, isTauri, setTrayDisplay } from "./lib/ipc";
 import { createDemoLocalUsage } from "./lib/demo";
 import {
   displayPercent,
@@ -54,6 +54,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
 }
 
+function nativePlatform(): "macos" | "windows" | "other" | "browser" {
+  if (!isTauri()) return "browser";
+  const identity = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (identity.includes("mac")) return "macos";
+  if (identity.includes("win")) return "windows";
+  return "other";
+}
+
 export function App() {
   const recording =
     import.meta.env.DEV &&
@@ -61,7 +69,10 @@ export function App() {
     new URLSearchParams(window.location.search).has("recording");
   const { preferences, replace, update } = usePreferences();
   const appUpdate = useAppUpdate();
-  const launchAtLogin = useLaunchAtLogin();
+  const launchAtLogin = useLaunchAtLogin({
+    enableByDefault: !preferences.launchAtLoginConfigured,
+    onDefaultApplied: () => update({ launchAtLoginConfigured: true }),
+  });
   const excludedAccountIds = useMemo(
     () => preferences.disconnectedAccounts.map((account) => account.id),
     [preferences.disconnectedAccounts],
@@ -82,6 +93,7 @@ export function App() {
       new URLSearchParams(window.location.search).has("preview-update"),
   );
   const alertState = useRef<AlertState>({});
+  const localUsageRequestId = useRef(0);
   const scrollRef = useRef<HTMLElement | null>(null);
   const pinnedTrayCache = useRef<{
     key: string;
@@ -240,6 +252,7 @@ export function App() {
   );
 
   const scanLocalUsage = useCallback(async () => {
+    const requestId = ++localUsageRequestId.current;
     if (!preferences.localUsageEnabled) {
       setLocalUsage(null);
       setLocalUsageLoading(false);
@@ -253,13 +266,15 @@ export function App() {
         mode === "demo"
           ? createDemoLocalUsage(Date.now(), localUsageDays)
           : await fetchLocalUsage(localUsageDays);
+      if (requestId !== localUsageRequestId.current) return;
       setLocalUsage(next);
     } catch (cause) {
+      if (requestId !== localUsageRequestId.current) return;
       setLocalUsageError(
         cause instanceof Error ? cause.message : "Could not read local token counters.",
       );
     } finally {
-      setLocalUsageLoading(false);
+      if (requestId === localUsageRequestId.current) setLocalUsageLoading(false);
     }
   }, [localUsageDays, mode, preferences.localUsageEnabled]);
 
@@ -278,13 +293,14 @@ export function App() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         if (view === "settings") closeSettings();
         else void hideWindow();
         return;
       }
-      if (isTypingTarget(event.target)) return;
       if (event.key === "r" || event.key === "R") {
         event.preventDefault();
         refreshAll();
@@ -335,6 +351,7 @@ export function App() {
         onChange={replace}
         mode={mode}
         accounts={monitoredSnapshot?.accounts ?? []}
+        appVersion={__APP_VERSION__}
         onDisconnectAccount={disconnectAccount}
         onReconnectAccount={reconnectAccount}
         onRefreshAccounts={refreshAll}
@@ -418,6 +435,7 @@ export function App() {
     <div
       className="app"
       data-recording={recording ? "true" : undefined}
+      data-platform={nativePlatform()}
       data-compact={preferences.compact ? "true" : undefined}
       data-theme={preferences.appearanceTheme}
       data-background={preferences.backgroundStyle}

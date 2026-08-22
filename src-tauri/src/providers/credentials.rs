@@ -8,8 +8,8 @@
 //!   macOS Keychain item `Claude Code-credentials`, or
 //!   `~/.claude/.credentials.json` elsewhere.
 //! * Codex is read from `~/.codex/auth.json`, written by `codex login`.
-//! * OpenRouter / Gemini keys come from an environment variable, the system
-//!   keychain, or the app's own secure store — always named by an
+//! * OpenRouter / Gemini keys come from an environment variable or the system
+//!   keychain — always named by an
 //!   [`AccountDescriptor`], never embedded in one.
 //!
 //! Deliberately **not** implemented: OAuth refresh. Refreshing rotates the
@@ -76,8 +76,8 @@ impl ResolvedCredential {
 /// Resolves an [`AccountDescriptor`] into credential material.
 ///
 /// This is the *only* seam through which provider adapters touch secrets.
-/// The main agent can supply its own implementation (for example one backed by
-/// `tauri-plugin-store`) without any adapter changing.
+/// The main agent can supply another implementation without any adapter
+/// changing.
 pub trait CredentialResolver: Send + Sync {
     fn resolve<'a>(
         &'a self,
@@ -128,10 +128,6 @@ impl LocalCredentialResolver {
             CredentialRef::Keychain { service, account } => {
                 read_keychain(service, account.as_deref()).await
             }
-            CredentialRef::AppStore { key } => Err(ProviderError::credentials_missing(format!(
-                "no secure-store entry named \"{key}\" is available to this resolver"
-            ))
-            .with_remediation("Add the key in EyeUrAI settings.")),
             CredentialRef::None => Err(ProviderError::credentials_missing(
                 "this account has no credential configured",
             )),

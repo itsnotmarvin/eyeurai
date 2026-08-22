@@ -23,6 +23,8 @@ const STATUS_LABEL: Record<Account["status"], string> = {
   stale: "Stale",
   error: "Error",
   pending: "Reading…",
+  unconfigured: "Not connected",
+  unsupported: "Unavailable",
 };
 
 function isRetainedCliAccount(account: Account): boolean {

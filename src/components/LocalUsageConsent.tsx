@@ -1,11 +1,20 @@
+import { useModalDialog } from "../hooks/useModalDialog";
+
 export interface LocalUsageConsentProps {
   onAllow: () => void;
   onClose: () => void;
 }
 
 export function LocalUsageConsent({ onAllow, onClose }: LocalUsageConsentProps) {
+  const dialogRef = useModalDialog(true, onClose);
   return (
-    <div className="connectsheet" role="dialog" aria-modal="true" aria-label="Local usage access">
+    <div
+      className="connectsheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Local usage access"
+      ref={dialogRef}
+    >
       <div className="connectsheet__card usageconsent">
         <div className="connectsheet__head">
           <div>

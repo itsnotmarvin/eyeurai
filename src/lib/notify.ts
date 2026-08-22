@@ -38,7 +38,9 @@ export function computeAlerts(
 
   for (const account of snapshot.accounts) {
     if (!preferences.enabledProviders.includes(account.provider)) continue;
-    if (account.status === "error") continue;
+    // Notifications must represent a live provider observation. Cached,
+    // pending, unsupported and failed rows can retain old percentages.
+    if (account.status !== "fresh") continue;
 
     for (const window of account.windows) {
       const key = `${account.id}::${window.id}`;

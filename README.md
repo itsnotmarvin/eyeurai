@@ -110,7 +110,7 @@ Select that button and choose **Update & restart**. EyeUrAI downloads and verifi
 - Multiple live Claude and Codex accounts side by side, plus retained snapshots when a terminal login changes
 - Percentage-used bars, reset countdowns, stale/error states, and optional alerts
 
-The first release deliberately does **not** collect conversations, calculate productivity scores, draw historical graphs, switch active credentials, sync data to a cloud service, or start automatically at login.
+EyeUrAI deliberately does **not** collect conversations, calculate productivity scores, switch active credentials, or sync data to a cloud service. With explicit permission, it can summarize token counters from local Claude Code and Codex logs and draw rolling daily usage graphs; message content and file paths never reach the interface. Fresh installations enable launch at login by default so the menu-bar reading stays available after a restart, and this can be disabled at any time in Settings.
 
 ## Privacy
 
@@ -143,7 +143,7 @@ See [SECURITY.md](SECURITY.md) for the security model and reporting process.
 - Windows: system-tray popover
 - Linux: planned after the first macOS and Windows release
 
-EyeUrAI does not launch at login. After restarting your computer, open EyeUrAI normally to put its icon back in the menu bar or system tray.
+Fresh installations launch EyeUrAI at login by default, hidden in the menu bar or system tray. You can turn **Launch at login** off or back on in Settings; existing installations preserve the choice they already made.
 
 ## Download
 
@@ -230,6 +230,9 @@ The current macOS builds use ad-hoc code signing so the open-source release pipe
 - `src-tauri/src/providers/` — isolated provider adapters
 - `src-tauri/src/models.rs` — provider-neutral quota contract
 - `src-tauri/src/commands.rs` — narrow Tauri command boundary
+- `src-tauri/src/account_registry.rs` — atomic, secret-free retained account snapshots
+- `src-tauri/src/claude_profiles.rs` and `codex_profiles.rs` — isolated multi-account profile discovery and login
+- `src-tauri/src/local_usage.rs` — bounded, aggregate-only scans of local CLI token counters
 - `src-tauri/src/lib.rs` — tray lifecycle and popover positioning
 
 Provider-specific data is normalized into account snapshots containing one or more quota windows. The frontend never needs to know how credentials are stored or how a provider fetches its limits.

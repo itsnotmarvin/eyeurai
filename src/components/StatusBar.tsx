@@ -26,6 +26,9 @@ function buildHeadline(
   let peak: { percent: number; text: string; resetsAt: string | null } | null = null;
 
   for (const account of accounts) {
+    // The headline is a live summary. Stale/error rows still render in their
+    // cards with context, but must never look like current quota pressure.
+    if (account.status !== "fresh") continue;
     for (const window of account.windows) {
       if (peak === null || window.percentUsed > peak.percent) {
         peak = {

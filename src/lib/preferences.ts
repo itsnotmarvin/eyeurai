@@ -21,7 +21,7 @@ import {
  */
 
 export const PREFERENCES_KEY = "eyeurai.preferences.v1";
-export const PREFERENCES_VERSION = 1;
+export const PREFERENCES_VERSION = 2;
 
 export const REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
   value: RefreshIntervalSeconds;
@@ -36,6 +36,7 @@ export const REFRESH_INTERVAL_OPTIONS: ReadonlyArray<{
 export const DEFAULT_PREFERENCES: Preferences = {
   version: PREFERENCES_VERSION,
   onboardingCompleted: false,
+  launchAtLoginConfigured: false,
   enabledProviders: [...PROVIDER_IDS],
   notificationsEnabled: false,
   warnThreshold: 75,
@@ -140,6 +141,13 @@ export function sanitizePreferences(raw: unknown): Preferences {
   return {
     version: PREFERENCES_VERSION,
     onboardingCompleted: input.onboardingCompleted === true,
+    // Existing users may already have deliberately disabled the login item.
+    // Treat their earlier preferences as configured so an update never reverses
+    // that OS-level choice; only a genuinely fresh install receives the default.
+    launchAtLoginConfigured:
+      input.launchAtLoginConfigured === true ||
+      (typeof input.version === "number" && input.version < PREFERENCES_VERSION) ||
+      input.onboardingCompleted === true,
     enabledProviders: sanitizeProviders(input.enabledProviders),
     notificationsEnabled: input.notificationsEnabled === true,
     warnThreshold: Math.min(warnThreshold, criticalThreshold),

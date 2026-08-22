@@ -104,6 +104,29 @@ function combinedDays(daily: LocalUsageDaySummary[]): Array<{ date: string; proc
     .sort((left, right) => right.date.localeCompare(left.date));
 }
 
+function UsageRange({
+  value,
+  onChange,
+}: {
+  value: RangeDays;
+  onChange: (days: RangeDays) => void;
+}) {
+  return (
+    <div className="localusage__range" aria-label="Usage range">
+      {([7, 30, 90] as const).map((days) => (
+        <button
+          key={days}
+          type="button"
+          aria-pressed={value === days}
+          onClick={() => onChange(days)}
+        >
+          {days} days
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function LocalUsagePanel({
   enabled,
   usage,
@@ -128,10 +151,16 @@ export function LocalUsagePanel({
         <span className="localusage__local">private · this Mac</span>
       </div>
 
+      {usage?.truncated ? (
+        <p className="localusage__warning" role="status">
+          This total is partial because the local history exceeded the safe scan limit.
+        </p>
+      ) : null}
+
       {!enabled ? (
         <div className="localusage__permission">
           <p>
-            Add T3-style token trends and breakdowns from local Claude Code and Codex logs.
+            Add private token trends and breakdowns from local Claude Code and Codex logs.
             Nothing is uploaded.
           </p>
           <button type="button" className="btn btn--primary" onClick={onReviewAccess}>
@@ -146,25 +175,20 @@ export function LocalUsagePanel({
           </button>
         </div>
       ) : loading && !usage ? (
-        <p className="localusage__state" role="status">Reading local counters…</p>
+        <>
+          <UsageRange value={rangeDays} onChange={onRangeChange} />
+          <p className="localusage__state" role="status">Reading local counters…</p>
+        </>
       ) : !usage || usage.observations === 0 ? (
-        <p className="localusage__state">
-          No recent Claude Code or Codex token counters were found on this Mac.
-        </p>
+        <>
+          <UsageRange value={rangeDays} onChange={onRangeChange} />
+          <p className="localusage__state">
+            No recent Claude Code or Codex token counters were found on this Mac.
+          </p>
+        </>
       ) : (
         <>
-          <div className="localusage__range" aria-label="Usage range">
-            {([7, 30, 90] as const).map((days) => (
-              <button
-                key={days}
-                type="button"
-                aria-pressed={rangeDays === days}
-                onClick={() => onRangeChange(days)}
-              >
-                {days} days
-              </button>
-            ))}
-          </div>
+          <UsageRange value={rangeDays} onChange={onRangeChange} />
 
           <div className="localusage__hero">
             <span className="localusage__heroLabel">Processed tokens</span>
@@ -218,7 +242,7 @@ export function LocalUsagePanel({
                     className="localusage__chart"
                     viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
                     role="img"
-                    aria-label={`Daily processed tokens over ${rangeDays} days`}
+                    aria-label={`Daily processed tokens over ${usage.rangeDays} days`}
                   >
                     <defs>
                       <linearGradient id="claude-area" x1="0" y1="0" x2="0" y2="1">

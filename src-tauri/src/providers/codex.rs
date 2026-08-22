@@ -121,10 +121,11 @@ impl QuotaProvider for CodexProvider {
                 return not_configured(CodexProvider::capability_info(), LOGIN_HINT);
             }
 
-            let mut results = Vec::with_capacity(accounts.len());
-            for (index, descriptor) in accounts.iter().enumerate() {
-                results.push(fetch_one(ctx, descriptor, index == 0).await);
-            }
+            let mut results =
+                super::fetch_accounts_concurrently(accounts, |descriptor, is_primary| {
+                    fetch_one(ctx, descriptor, is_primary)
+                })
+                .await;
             // A user may add the same account that their default terminal
             // happens to use. Prefer the independently managed profile in
             // that case, while retaining every distinct managed profile.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isTauri } from "../lib/ipc";
 
@@ -10,6 +10,12 @@ export interface LaunchAtLoginState {
   setEnabled: (enabled: boolean) => Promise<void>;
 }
 
+export interface LaunchAtLoginOptions {
+  /** Enables the OS login item once, while preserving later user opt-out. */
+  enableByDefault?: boolean;
+  onDefaultApplied?: () => void;
+}
+
 function message(cause: unknown): string {
   return cause instanceof Error && cause.message.trim()
     ? cause.message
@@ -17,19 +23,33 @@ function message(cause: unknown): string {
 }
 
 /** Mirrors the macOS login-item state; the OS remains the source of truth. */
-export function useLaunchAtLogin(): LaunchAtLoginState {
+export function useLaunchAtLogin({
+  enableByDefault = false,
+  onDefaultApplied,
+}: LaunchAtLoginOptions = {}): LaunchAtLoginState {
   const available = isTauri();
   const [enabled, setEnabledState] = useState(false);
   const [busy, setBusy] = useState(available);
   const [error, setError] = useState<string | null>(null);
+  const defaultAppliedRef = useRef(onDefaultApplied);
+  defaultAppliedRef.current = onDefaultApplied;
 
   useEffect(() => {
     if (!available) return;
     let active = true;
     void import("@tauri-apps/plugin-autostart")
-      .then(({ isEnabled }) => isEnabled())
+      .then(async (autostart) => {
+        let value = await autostart.isEnabled();
+        if (!value && enableByDefault) {
+          await autostart.enable();
+          value = await autostart.isEnabled();
+        }
+        return value;
+      })
       .then((value) => {
-        if (active) setEnabledState(value);
+        if (!active) return;
+        setEnabledState(value);
+        if (enableByDefault && value) defaultAppliedRef.current?.();
       })
       .catch((cause) => {
         if (active) setError(message(cause));
@@ -40,7 +60,7 @@ export function useLaunchAtLogin(): LaunchAtLoginState {
     return () => {
       active = false;
     };
-  }, [available]);
+  }, [available, enableByDefault]);
 
   const setEnabled = useCallback(
     async (next: boolean) => {

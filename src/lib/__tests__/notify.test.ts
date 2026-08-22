@@ -81,7 +81,7 @@ describe("computeAlerts", () => {
     expect(again.alerts).toHaveLength(1);
   });
 
-  it("ignores hidden providers and errored accounts", () => {
+  it("ignores hidden providers and every non-live account state", () => {
     const hidden = computeAlerts(snapshotWith(99), {
       ...preferences,
       enabledProviders: ["gemini"],
@@ -90,5 +90,11 @@ describe("computeAlerts", () => {
 
     const errored = computeAlerts(snapshotWith(99, { status: "error" }), preferences, {});
     expect(errored.alerts).toHaveLength(0);
+
+    for (const status of ["stale", "pending", "unconfigured", "unsupported"] as const) {
+      const result = computeAlerts(snapshotWith(99, { status }), preferences, {});
+      expect(result.alerts).toHaveLength(0);
+      expect(result.state).not.toHaveProperty("claude-1::session");
+    }
   });
 });

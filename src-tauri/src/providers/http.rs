@@ -208,7 +208,6 @@ impl HttpClient {
         response: reqwest::Response,
         url: &str,
     ) -> Result<T, ProviderError> {
-
         let status = response.status();
         let retry_after = response
             .headers()

@@ -111,11 +111,10 @@ export function useSnapshot(
         const next = options.liveRefresh
           ? await requestRefresh(exclusions)
           : await fetchSnapshot(exclusions);
-        if (next) {
-          apply(next);
-        } else if (!snapshotRef.current) {
-          apply(createDemoSnapshot(Date.now()));
+        if (!next) {
+          throw new Error("EyeUrAI could not read quota data from the local agent.");
         }
+        apply(next);
       } catch (cause) {
         if (!mounted.current) return;
         setError(describeError(cause));

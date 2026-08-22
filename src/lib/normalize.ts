@@ -210,11 +210,11 @@ function normalizeStatus(raw: unknown, stale: boolean): AccountStatus {
   if (value === "fresh" || value === "ok") return "fresh";
   if (value === "pending") return "pending";
   if (value === "stale" || value === "partial" || value === "rate_limited") return "stale";
+  if (value === "not_configured") return "unconfigured";
+  if (value === "unsupported") return "unsupported";
   if (
     value === "error" ||
-    value === "unauthorized" ||
-    value === "unsupported" ||
-    value === "not_configured"
+    value === "unauthorized"
   ) {
     return "error";
   }

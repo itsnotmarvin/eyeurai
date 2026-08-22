@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::account_registry::AccountSnapshotRegistry;
 use crate::claude_profiles::{self, ClaudeLoginStarted};
 use crate::codex_profiles::{self, CodexLoginStarted};
-use crate::models::{ProviderCapability, ProviderId, QuotaSnapshot};
+use crate::models::{AccountDescriptor, ProviderId, QuotaSnapshot};
 use crate::providers::credentials::default_descriptors;
 use crate::providers::{ProviderContext, ProviderRegistry};
 
@@ -70,7 +70,7 @@ impl AppState {
         }
         let descriptors = all_descriptors
             .into_iter()
-            .filter(|descriptor| !excluded_account_ids.contains(&descriptor.id))
+            .filter(|descriptor| !descriptor_is_excluded(descriptor, &excluded_account_ids))
             .collect();
         let mut snapshot = self
             .registry
@@ -134,6 +134,30 @@ fn normalize_exclusions(values: Vec<String>) -> BTreeSet<String> {
         .collect()
 }
 
+/// A terminal credential slot has a fixed descriptor ID, but a successful
+/// read is exposed under a pseudonymous principal ID. Once that principal is
+/// disconnected, exclude both identities so a later logout cannot turn the
+/// hidden account back into a `claude-cli`/`codex-cli` failure row.
+fn descriptor_is_excluded(
+    descriptor: &AccountDescriptor,
+    excluded_account_ids: &BTreeSet<String>,
+) -> bool {
+    if excluded_account_ids.contains(&descriptor.id) {
+        return true;
+    }
+
+    let principal_prefix = match (descriptor.provider, descriptor.id.as_str()) {
+        (ProviderId::Claude, "claude-cli") => Some("claude:"),
+        (ProviderId::Codex, "codex-cli") => Some("codex:"),
+        _ => None,
+    };
+    principal_prefix.is_some_and(|prefix| {
+        excluded_account_ids
+            .iter()
+            .any(|account_id| account_id.starts_with(prefix))
+    })
+}
+
 /// Return the in-memory snapshot, performing the first live read lazily.
 #[tauri::command]
 pub async fn get_snapshot(
@@ -161,34 +185,9 @@ pub async fn refresh_quotas(
     Ok(snapshot)
 }
 
-/// Static, non-secret capability metadata for settings and diagnostics.
-#[tauri::command]
-pub fn provider_capabilities(state: State<'_, AppState>) -> Vec<ProviderCapability> {
-    state.registry.capabilities()
-}
-
-/// Explicit development aid. Live commands never fall back to demo data, so
-/// the UI cannot mistake synthetic values for a real account.
-#[tauri::command]
-pub fn get_demo_snapshot() -> QuotaSnapshot {
-    crate::providers::demo::snapshot(chrono::Utc::now())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn app_state_has_all_provider_capabilities() {
-        let state = AppState::new(
-            std::env::temp_dir().join(format!("eyeurai-state-test-{}", std::process::id())),
-        )
-        .unwrap();
-        let capabilities = state.registry.capabilities();
-        assert_eq!(capabilities.len(), 4);
-        assert_eq!(capabilities[0].provider, ProviderId::Claude);
-        assert_eq!(capabilities[3].provider, ProviderId::Gemini);
-    }
 
     #[test]
     fn exclusions_are_trimmed_deduplicated_and_reject_empty_values() {
@@ -202,5 +201,38 @@ mod tests {
             exclusions.into_iter().collect::<Vec<_>>(),
             vec!["claude-cli".to_string(), "codex-cli".to_string()]
         );
+    }
+
+    #[test]
+    fn disconnected_cli_principal_also_excludes_its_mutable_descriptor() {
+        let exclusions = normalize_exclusions(vec![
+            "claude:principal-fingerprint".to_string(),
+            "codex:account-claim".to_string(),
+        ]);
+        let descriptors = default_descriptors();
+        let claude = descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "claude-cli")
+            .expect("default Claude descriptor");
+        let codex = descriptors
+            .iter()
+            .find(|descriptor| descriptor.id == "codex-cli")
+            .expect("default Codex descriptor");
+
+        assert!(descriptor_is_excluded(claude, &exclusions));
+        assert!(descriptor_is_excluded(codex, &exclusions));
+    }
+
+    #[test]
+    fn disconnecting_a_managed_profile_does_not_hide_the_terminal_slot() {
+        let exclusions = normalize_exclusions(vec![
+            "claude-profile:profile-1".to_string(),
+            "codex-profile:profile-1".to_string(),
+        ]);
+        let descriptors = default_descriptors();
+
+        assert!(descriptors
+            .iter()
+            .all(|descriptor| !descriptor_is_excluded(descriptor, &exclusions)));
     }
 }

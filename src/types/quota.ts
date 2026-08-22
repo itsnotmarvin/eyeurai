@@ -43,7 +43,13 @@ export type QuotaKind =
   | "rate";
 
 /** Freshness of a single account's data. */
-export type AccountStatus = "fresh" | "stale" | "error" | "pending";
+export type AccountStatus =
+  | "fresh"
+  | "stale"
+  | "error"
+  | "pending"
+  | "unconfigured"
+  | "unsupported";
 
 /** How the credential for an account was discovered. Never includes secrets. */
 export type AuthSource = "oauth" | "api-key" | "cli" | "unknown";
@@ -134,6 +140,8 @@ export interface LocalUsageModelSummary {
 export interface LocalUsageSnapshot {
   generatedAt: string;
   rangeDays: number;
+  /** Safety limits prevented the scanner from reading every eligible record. */
+  truncated: boolean;
   processedTokens: number;
   uncachedInputTokens: number;
   cachedInputTokens: number;
@@ -176,6 +184,8 @@ export type BackgroundStyle = (typeof BACKGROUND_STYLES)[number];
 export interface Preferences {
   version: number;
   onboardingCompleted: boolean;
+  /** True after the native login item has received its one-time default. */
+  launchAtLoginConfigured: boolean;
   enabledProviders: ProviderId[];
   notificationsEnabled: boolean;
   /** 0–100. Bars at or above this are amber. */

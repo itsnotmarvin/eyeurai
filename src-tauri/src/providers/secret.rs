@@ -4,7 +4,7 @@
 //! token*:
 //!
 //! * it does not implement `serde::Serialize`, so it can never end up in a
-//!   snapshot, a Tauri command response, or a `tauri-plugin-store` file;
+//!   snapshot, a Tauri command response, or a preference file;
 //! * `Debug` and `Display` render `<redacted>`, so `{:?}` in a log line or a
 //!   `dbg!` left behind in a PR cannot spill it;
 //! * the inner value is only reachable through the explicit, greppable

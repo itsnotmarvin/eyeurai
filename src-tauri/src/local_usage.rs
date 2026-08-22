@@ -3,7 +3,8 @@
 //! The scanner returns aggregate numbers and model labels only. Paths, message
 //! text, session identifiers, and credentials never cross the Tauri boundary.
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -15,9 +16,10 @@ use serde_json::Value;
 
 const DEFAULT_RANGE_DAYS: u32 = 7;
 const MAX_RANGE_DAYS: u32 = 90;
-const MAX_FILES: usize = 8_000;
+const MAX_PROVIDER_FILES: usize = 4_000;
+const MAX_DISCOVERY_DIRECTORIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 96 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 768 * 1024 * 1024;
+const MAX_PROVIDER_BYTES: u64 = 384 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 12 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -88,13 +90,15 @@ pub struct LocalUsageSnapshot {
     pub reasoning_output_tokens: u64,
     pub observations: u64,
     pub sessions: u64,
+    /// True when safety caps prevented a complete scan.
+    pub truncated: bool,
     pub providers: Vec<LocalUsageProviderSummary>,
     pub daily: Vec<LocalUsageDaySummary>,
     pub models: Vec<LocalUsageModelSummary>,
 }
 
 impl LocalUsageSnapshot {
-    fn from_scans(range_days: u32, scans: Vec<ProviderScan>) -> Self {
+    fn from_scans(range_days: u32, scans: Vec<ProviderScan>, truncated: bool) -> Self {
         let providers: Vec<_> = scans.iter().map(|scan| scan.summary.clone()).collect();
         let sum = |field: fn(&LocalUsageProviderSummary) -> u64| {
             providers.iter().map(field).fold(0_u64, u64::saturating_add)
@@ -146,6 +150,7 @@ impl LocalUsageSnapshot {
             reasoning_output_tokens: sum(|row| row.reasoning_output_tokens),
             observations: sum(|row| row.observations),
             sessions: sum(|row| row.sessions),
+            truncated,
             providers,
             daily,
             models,
@@ -194,6 +199,62 @@ struct UsageCounters {
 struct ScanBudget {
     files: usize,
     bytes: u64,
+    truncated: bool,
+}
+
+#[derive(Eq, PartialEq)]
+struct RecentFile {
+    modified: SystemTime,
+    path: PathBuf,
+}
+
+impl Ord for RecentFile {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.modified
+            .cmp(&other.modified)
+            // When mtimes tie, prefer the lexicographically smaller path so
+            // selection and output remain deterministic across filesystems.
+            .then_with(|| other.path.cmp(&self.path))
+    }
+}
+
+impl PartialOrd for RecentFile {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn retain_newest(
+    newest: &mut BinaryHeap<Reverse<RecentFile>>,
+    candidate: RecentFile,
+    limit: usize,
+) -> bool {
+    if limit == 0 {
+        return true;
+    }
+    if newest.len() < limit {
+        newest.push(Reverse(candidate));
+        return false;
+    }
+
+    if newest
+        .peek()
+        .map(|oldest| candidate > oldest.0)
+        .unwrap_or(false)
+    {
+        newest.pop();
+        newest.push(Reverse(candidate));
+    }
+    true
+}
+
+fn newest_paths(newest: BinaryHeap<Reverse<RecentFile>>) -> Vec<PathBuf> {
+    let mut files = newest
+        .into_iter()
+        .map(|Reverse(candidate)| candidate)
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| right.cmp(left));
+    files.into_iter().map(|candidate| candidate.path).collect()
 }
 
 #[tauri::command]
@@ -215,22 +276,29 @@ fn scan(range_days: u32) -> LocalUsageSnapshot {
     );
     let home = match dirs::home_dir() {
         Some(path) => path,
-        None => return LocalUsageSnapshot::from_scans(range_days, Vec::new()),
+        None => return LocalUsageSnapshot::from_scans(range_days, Vec::new(), false),
     };
-    let mut budget = ScanBudget::default();
+    // Keep provider budgets independent so a large Claude history cannot
+    // silently consume every byte before Codex is considered.
+    let mut claude_budget = ScanBudget::default();
+    let mut codex_budget = ScanBudget::default();
     let mut scans = Vec::new();
 
-    let claude = scan_claude(&home.join(".claude/projects"), since, &mut budget);
+    let claude = scan_claude(&home.join(".claude/projects"), since, &mut claude_budget);
     if claude.summary.observations > 0 {
         scans.push(claude);
     }
 
-    let codex = scan_codex(&home.join(".codex/sessions"), since, &mut budget);
+    let codex = scan_codex(&home.join(".codex/sessions"), since, &mut codex_budget);
     if codex.summary.observations > 0 {
         scans.push(codex);
     }
 
-    LocalUsageSnapshot::from_scans(range_days, scans)
+    LocalUsageSnapshot::from_scans(
+        range_days,
+        scans,
+        claude_budget.truncated || codex_budget.truncated,
+    )
 }
 
 fn scan_claude(root: &Path, since: DateTime<Utc>, budget: &mut ScanBudget) -> ProviderScan {
@@ -408,57 +476,87 @@ fn timestamp_in_range(value: &Value, since: DateTime<Utc>) -> bool {
         .unwrap_or(false)
 }
 
-fn recent_jsonl_files(root: &Path, since: DateTime<Utc>, budget: &ScanBudget) -> Vec<PathBuf> {
-    let mut files = Vec::new();
+fn recent_jsonl_files(root: &Path, since: DateTime<Utc>, budget: &mut ScanBudget) -> Vec<PathBuf> {
     let since_system: SystemTime = since.into();
-    collect_jsonl(root, since_system, &mut files, 0);
-    files.sort_by(|left, right| {
-        modified(right)
-            .cmp(&modified(left))
-            .then_with(|| left.cmp(right))
-    });
-    files.truncate(MAX_FILES.saturating_sub(budget.files));
-    files
+    let remaining = MAX_PROVIDER_FILES.saturating_sub(budget.files);
+    collect_jsonl(root, since_system, remaining, &mut budget.truncated)
 }
 
-fn collect_jsonl(root: &Path, since: SystemTime, files: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 12 || files.len() >= MAX_FILES {
-        return;
-    }
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
+fn collect_jsonl(
+    root: &Path,
+    since: SystemTime,
+    limit: usize,
+    truncated: &mut bool,
+) -> Vec<PathBuf> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut directories_scanned = 0usize;
+    // Reverse turns BinaryHeap into a min-heap, so its head is always the
+    // oldest selected file and can be replaced by a newer candidate in O(log n).
+    let mut newest = BinaryHeap::<Reverse<RecentFile>>::new();
+
+    while let Some(directory) = directories.pop() {
+        if directories_scanned >= MAX_DISCOVERY_DIRECTORIES {
+            *truncated = true;
+            break;
+        }
+        directories_scanned += 1;
+
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
             Err(_) => continue,
         };
-        if metadata.is_dir() {
-            collect_jsonl(&path, since, files, depth + 1);
-        } else if metadata.is_file()
-            && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
-            && metadata.len() <= MAX_FILE_BYTES
-            && metadata
-                .modified()
-                .map(|time| time >= since)
-                .unwrap_or(false)
-        {
-            files.push(path);
-        }
-        if files.len() >= MAX_FILES {
-            return;
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            // Never follow symlinked directories: local history roots are
+            // user-writable and a loop must not pin a background scan.
+            if file_type.is_dir() {
+                directories.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file()
+                || entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            let modified = match metadata.modified() {
+                Ok(modified) if modified >= since => modified,
+                _ => continue,
+            };
+            if metadata.len() > MAX_FILE_BYTES {
+                *truncated = true;
+                continue;
+            }
+            if limit == 0 {
+                *truncated = true;
+                return Vec::new();
+            }
+
+            let candidate = RecentFile {
+                modified,
+                path: entry.path(),
+            };
+            if retain_newest(&mut newest, candidate, limit) {
+                // At least one eligible file cannot be scanned, regardless of
+                // whether this candidate replaced the oldest selection.
+                *truncated = true;
+            }
         }
     }
-}
 
-fn modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+    newest_paths(newest)
 }
 
 fn visit_json_lines(path: &Path, budget: &mut ScanBudget, mut visit: impl FnMut(&Value)) {
-    if budget.files >= MAX_FILES || budget.bytes >= MAX_TOTAL_BYTES {
+    if budget.files >= MAX_PROVIDER_FILES || budget.bytes >= MAX_PROVIDER_BYTES {
+        budget.truncated = true;
         return;
     }
     let file = match File::open(path) {
@@ -475,10 +573,12 @@ fn visit_json_lines(path: &Path, budget: &mut ScanBudget, mut visit: impl FnMut(
             Ok(read) => read,
         };
         budget.bytes = budget.bytes.saturating_add(read as u64);
-        if budget.bytes > MAX_TOTAL_BYTES {
+        if budget.bytes > MAX_PROVIDER_BYTES {
+            budget.truncated = true;
             break;
         }
         if read > MAX_LINE_BYTES {
+            budget.truncated = true;
             continue;
         }
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
@@ -490,6 +590,38 @@ fn visit_json_lines(path: &Path, budget: &mut ScanBudget, mut visit: impl FnMut(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn recent_file(path: &str, seconds: u64) -> RecentFile {
+        RecentFile {
+            modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            path: PathBuf::from(path),
+        }
+    }
+
+    #[test]
+    fn recent_file_cap_keeps_the_newest_candidates() {
+        let mut newest = BinaryHeap::new();
+        assert!(!retain_newest(&mut newest, recent_file("old.jsonl", 1), 2));
+        assert!(!retain_newest(&mut newest, recent_file("new.jsonl", 3), 2));
+        assert!(retain_newest(
+            &mut newest,
+            recent_file("middle.jsonl", 2),
+            2
+        ));
+        assert_eq!(
+            newest_paths(newest),
+            vec![PathBuf::from("new.jsonl"), PathBuf::from("middle.jsonl")]
+        );
+    }
+
+    #[test]
+    fn exact_recent_file_cap_is_not_reported_as_truncated() {
+        let mut newest = BinaryHeap::new();
+        let first_omitted = retain_newest(&mut newest, recent_file("a.jsonl", 1), 2);
+        let second_omitted = retain_newest(&mut newest, recent_file("b.jsonl", 2), 2);
+        assert!(!first_omitted && !second_omitted);
+        assert_eq!(newest_paths(newest).len(), 2);
+    }
 
     #[test]
     fn claude_arithmetic_keeps_cache_categories_separate() {
@@ -544,9 +676,10 @@ mod tests {
                 reasoning_output: 0,
             },
         );
-        let snapshot = LocalUsageSnapshot::from_scans(7, vec![claude]);
+        let snapshot = LocalUsageSnapshot::from_scans(7, vec![claude], false);
         assert_eq!(snapshot.processed_tokens, 10);
         assert_eq!(snapshot.observations, 1);
+        assert!(!snapshot.truncated);
         assert_eq!(snapshot.daily[0].processed_tokens, 10);
         assert_eq!(snapshot.models[0].model, "claude-opus");
         let json = serde_json::to_value(snapshot).unwrap();

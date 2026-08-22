@@ -285,7 +285,6 @@ async fn refresh_grant(
         .map_err(|error| {
             if error.kind == crate::models::ProviderErrorKind::Unauthorized
                 || error.kind == crate::models::ProviderErrorKind::Forbidden
-                || error.kind == crate::models::ProviderErrorKind::Upstream
             {
                 ProviderError::credentials_missing(
                     "this EyeUrAI Claude account needs to be signed in again",
@@ -343,8 +342,7 @@ fn random_urlsafe(bytes: usize) -> Result<String, ProviderError> {
 
 /// Unpadded base64url, as PKCE requires.
 fn base64_url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -413,14 +411,11 @@ async fn complete_login(
     let bearer = Secret::new(&tokens.access_token);
     let profile = http
         .get_json::<Value>(
-            &JsonRequest::new(
-                "https://api.anthropic.com/api/oauth/profile",
-                user_agent,
-            )
-            .bearer(&bearer)
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .timeout(TOKEN_TIMEOUT)
-            .max_attempts(1),
+            &JsonRequest::new("https://api.anthropic.com/api/oauth/profile", user_agent)
+                .bearer(&bearer)
+                .header("anthropic-beta", "oauth-2025-04-20")
+                .timeout(TOKEN_TIMEOUT)
+                .max_attempts(1),
         )
         .await
         .ok()
@@ -434,8 +429,9 @@ async fn complete_login(
                 .timeout(TOKEN_TIMEOUT),
         )
         .await?;
-    crate::providers::claude::parse_usage(&usage, now)
-        .map_err(|_| ProviderError::parse("Claude sign-in completed but usage could not be read"))?;
+    crate::providers::claude::parse_usage(&usage, now).map_err(|_| {
+        ProviderError::parse("Claude sign-in completed but usage could not be read")
+    })?;
 
     let grant = StoredGrant {
         version: 1,
@@ -475,13 +471,21 @@ async fn wait_for_callback(listener: TcpListener, state: &str) -> Result<String,
                 return Ok(code);
             }
             CallbackOutcome::Denied(message) => {
-                let _ = respond_html(stream.into_inner(), "EyeUrAI — Claude sign-in was not completed. You can close this tab.").await;
+                let _ = respond_html(
+                    stream.into_inner(),
+                    "EyeUrAI — Claude sign-in was not completed. You can close this tab.",
+                )
+                .await;
                 return Err(ProviderError::unauthorized(message));
             }
             CallbackOutcome::NotTheCallback => {
                 // Favicon probes, other-state requests, port scans: answer
                 // and keep waiting for the real redirect.
-                let _ = respond_html(stream.into_inner(), "EyeUrAI is waiting for the Claude sign-in redirect.").await;
+                let _ = respond_html(
+                    stream.into_inner(),
+                    "EyeUrAI is waiting for the Claude sign-in redirect.",
+                )
+                .await;
             }
         }
     }
@@ -536,10 +540,7 @@ fn parse_callback_request(request_line: &str, expected_state: &str) -> CallbackO
     }
 }
 
-async fn respond_html(
-    mut stream: tokio::net::TcpStream,
-    message: &str,
-) -> std::io::Result<()> {
+async fn respond_html(mut stream: tokio::net::TcpStream, message: &str) -> std::io::Result<()> {
     let body = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>EyeUrAI</title></head><body style=\"font-family:system-ui;margin:48px;color:#222\"><p>{message}</p></body></html>"
     );
@@ -601,10 +602,10 @@ fn read_grant(profile_home: &Path) -> Result<StoredGrant, ProviderError> {
         .map(|metadata| metadata.file_type().is_file())
         .unwrap_or(false);
     if !auth_is_regular_file {
-        return Err(
-            ProviderError::credentials_missing("this EyeUrAI Claude account is not signed in")
-                .with_remediation("Add the Claude account again in EyeUrAI settings."),
-        );
+        return Err(ProviderError::credentials_missing(
+            "this EyeUrAI Claude account is not signed in",
+        )
+        .with_remediation("Add the Claude account again in EyeUrAI settings."));
     }
     let blob = fs::read_to_string(&auth_path)
         .map_err(|_| ProviderError::internal("could not read the Claude account credential"))?;
@@ -613,10 +614,10 @@ fn read_grant(profile_home: &Path) -> Result<StoredGrant, ProviderError> {
             .with_remediation("Add the Claude account again in EyeUrAI settings.")
     })?;
     if grant.access_token.is_empty() || grant.refresh_token.is_empty() {
-        return Err(
-            ProviderError::credentials_missing("this EyeUrAI Claude account is not signed in")
-                .with_remediation("Add the Claude account again in EyeUrAI settings."),
-        );
+        return Err(ProviderError::credentials_missing(
+            "this EyeUrAI Claude account is not signed in",
+        )
+        .with_remediation("Add the Claude account again in EyeUrAI settings."));
     }
     Ok(grant)
 }
@@ -705,10 +706,7 @@ mod tests {
         let pairs: std::collections::BTreeMap<_, _> = parsed.query_pairs().into_owned().collect();
         assert_eq!(pairs.get("code").map(String::as_str), Some("true"));
         assert_eq!(pairs.get("client_id").map(String::as_str), Some(CLIENT_ID));
-        assert_eq!(
-            pairs.get("response_type").map(String::as_str),
-            Some("code")
-        );
+        assert_eq!(pairs.get("response_type").map(String::as_str), Some("code"));
         assert_eq!(
             pairs.get("redirect_uri").map(String::as_str),
             Some("http://localhost:7777/callback")
@@ -726,14 +724,17 @@ mod tests {
         let ok = parse_callback_request("GET /callback?code=abc&state=xyz HTTP/1.1", "xyz");
         assert!(matches!(ok, CallbackOutcome::Code(code) if code == "abc"));
 
-        let wrong_state = parse_callback_request("GET /callback?code=abc&state=nope HTTP/1.1", "xyz");
+        let wrong_state =
+            parse_callback_request("GET /callback?code=abc&state=nope HTTP/1.1", "xyz");
         assert!(matches!(wrong_state, CallbackOutcome::NotTheCallback));
 
         let favicon = parse_callback_request("GET /favicon.ico HTTP/1.1", "xyz");
         assert!(matches!(favicon, CallbackOutcome::NotTheCallback));
 
-        let denied =
-            parse_callback_request("GET /callback?error=access_denied&state=xyz HTTP/1.1", "xyz");
+        let denied = parse_callback_request(
+            "GET /callback?error=access_denied&state=xyz HTTP/1.1",
+            "xyz",
+        );
         assert!(matches!(denied, CallbackOutcome::Denied(_)));
 
         let no_code = parse_callback_request("GET /callback?state=xyz HTTP/1.1", "xyz");
@@ -797,10 +798,16 @@ mod tests {
         assert_eq!(read.refresh_token, "FAKE-refresh");
         assert_eq!(read.email.as_deref(), Some("dev@example.com"));
 
-        fs::write(profile.join(AUTH_FILE), r#"{"version":1,"accessToken":"","refreshToken":""}"#)
-            .unwrap();
+        fs::write(
+            profile.join(AUTH_FILE),
+            r#"{"version":1,"accessToken":"","refreshToken":""}"#,
+        )
+        .unwrap();
         let err = read_grant(&profile).expect_err("empty tokens are missing credentials");
-        assert_eq!(err.kind, crate::models::ProviderErrorKind::CredentialsMissing);
+        assert_eq!(
+            err.kind,
+            crate::models::ProviderErrorKind::CredentialsMissing
+        );
     }
 
     #[test]

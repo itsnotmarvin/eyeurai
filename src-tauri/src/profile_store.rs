@@ -105,16 +105,16 @@ impl ProfileStore {
                 Ok(()) => {
                     #[cfg(unix)]
                     fs::set_permissions(&profile_home, fs::Permissions::from_mode(0o700))
-                        .map_err(|_| {
-                            ProviderError::internal("could not secure the new profile")
-                        })?;
+                        .map_err(|_| ProviderError::internal("could not secure the new profile"))?;
                     return Ok((profile_id, profile_home));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(_) => return Err(ProviderError::internal("could not create a new profile")),
             }
         }
-        Err(ProviderError::internal("could not allocate a unique profile"))
+        Err(ProviderError::internal(
+            "could not allocate a unique profile",
+        ))
     }
 
     /// Refuse any profile path that is not a real directory directly under
@@ -140,7 +140,9 @@ impl ProfileStore {
         let metadata = fs::symlink_metadata(profile_home)
             .map_err(|_| ProviderError::credentials_missing("the profile no longer exists"))?;
         if !metadata.file_type().is_dir() {
-            return Err(ProviderError::internal("the profile path is not a directory"));
+            return Err(ProviderError::internal(
+                "the profile path is not a directory",
+            ));
         }
         let canonical_parent = fs::canonicalize(parent)
             .map_err(|_| ProviderError::internal("could not resolve the profile root"))?;
@@ -177,7 +179,11 @@ impl ProfileStore {
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(ProviderError::internal("could not inspect the profile lock")),
+            Err(_) => {
+                return Err(ProviderError::internal(
+                    "could not inspect the profile lock",
+                ))
+            }
         }
         let lock_file = {
             let mut options = OpenOptions::new();

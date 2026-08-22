@@ -533,15 +533,6 @@ impl Freshness {
             stale: false,
         }
     }
-
-    pub fn demo(now: DateTime<Utc>) -> Self {
-        Freshness {
-            source: DataSource::Demo,
-            fetched_at: Some(now),
-            age_seconds: Some(0),
-            stale: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -578,9 +569,6 @@ pub enum CredentialRef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account: Option<String>,
     },
-    /// An entry in the app's own `tauri-plugin-store` secret store. The main
-    /// agent owns the store; providers only ever see the key name.
-    AppStore { key: String },
     /// Explicitly no credential; used by descriptors that exist only to report
     /// an `Unsupported` state.
     None,
@@ -603,7 +591,6 @@ impl CredentialRef {
                 Some(a) => format!("Keychain item {service} ({a})"),
                 None => format!("Keychain item {service}"),
             },
-            CredentialRef::AppStore { key } => format!("EyeUrAI secure store entry \"{key}\""),
             CredentialRef::None => "No credential".to_string(),
         }
     }
@@ -616,7 +603,6 @@ pub enum CredentialKind {
     CodexCli,
     Env,
     Keychain,
-    AppStore,
     None,
 }
 
@@ -698,9 +684,8 @@ pub enum CapabilityLevel {
     Unsupported,
 }
 
-/// Static, no-I/O description of what a provider adapter can do. Returned by
-/// the `provider_capabilities` command so the settings screen can be built
-/// without a network round trip.
+/// Static, no-I/O description of what a provider adapter can do. Adapters use
+/// this same metadata for normalized snapshots and capability diagnostics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCapability {
     pub provider: ProviderId,

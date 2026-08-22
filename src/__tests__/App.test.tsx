@@ -132,6 +132,44 @@ describe("App", () => {
     await waitFor(() => expect(loadPreferences().disconnectedAccounts).toEqual([]));
   });
 
+  it("does not resurrect a disconnected CLI principal as a provider error row", async () => {
+    const demoSnapshot = demo.createDemoSnapshot();
+    const claudeTemplate = demoSnapshot.accounts.find((account) => account.provider === "claude");
+    if (!claudeTemplate) throw new Error("demo snapshot needs a Claude account");
+
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    vi.spyOn(ipc, "fetchSnapshot").mockResolvedValue({
+      ...demoSnapshot,
+      accounts: [
+        {
+          ...claudeTemplate,
+          id: "claude-status-0",
+          label: "Claude",
+          status: "error",
+          message: "No Claude Code login was found.",
+          windows: [],
+        },
+        ...demoSnapshot.accounts.filter((account) => account.provider === "openai").slice(0, 1),
+      ],
+    });
+    vi.spyOn(ipc, "subscribeToSnapshots").mockResolvedValue(() => {});
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+    seedPreferences({
+      disconnectedAccounts: [
+        {
+          id: "claude:principal-fingerprint",
+          provider: "claude",
+          label: "person@example.com",
+        },
+      ],
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "OpenAI" })).toBeInTheDocument();
+    expect(screen.queryByText("No Claude Code login was found.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Claude" })).not.toBeInTheDocument();
+  });
+
   it("distinguishes the current terminal login from retained accounts in settings", async () => {
     seedPreferences();
     render(<App />);
@@ -163,6 +201,23 @@ describe("App", () => {
       within(dialog).getByText(/terminal login is picked up automatically/i),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Add Claude account" })).toBeInTheDocument();
+  });
+
+  it("keeps global shortcuts behind a modal and dismisses only the modal with Escape", async () => {
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+
+    expect(screen.getByRole("dialog", { name: "Add account" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "," });
+    expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add account" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Add account" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
   });
 
   it("adds a Claude account through an isolated EyeUrAI-owned profile", async () => {
@@ -337,6 +392,52 @@ describe("App", () => {
     expect(within(usage).getByRole("table", { name: "day usage breakdown" })).toBeInTheDocument();
   });
 
+  it("ignores an older local-usage range scan that finishes last", async () => {
+    let resolveSeven!: (value: ReturnType<typeof demo.createDemoLocalUsage>) => void;
+    let resolveNinety!: (value: ReturnType<typeof demo.createDemoLocalUsage>) => void;
+    const seven = new Promise<ReturnType<typeof demo.createDemoLocalUsage>>((resolve) => {
+      resolveSeven = resolve;
+    });
+    const ninety = new Promise<ReturnType<typeof demo.createDemoLocalUsage>>((resolve) => {
+      resolveNinety = resolve;
+    });
+
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    vi.spyOn(ipc, "fetchSnapshot").mockResolvedValue(demo.createDemoSnapshot());
+    vi.spyOn(ipc, "subscribeToSnapshots").mockResolvedValue(() => {});
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+    const fetchLocalUsage = vi.spyOn(ipc, "fetchLocalUsage").mockImplementation(async (days) => {
+      return await (days === 90 ? ninety : seven);
+    });
+
+    seedPreferences({ localUsageEnabled: true });
+    render(<App />);
+    const usage = await screen.findByRole("region", { name: "Local token usage" });
+    await waitFor(() => expect(fetchLocalUsage).toHaveBeenCalledWith(7));
+    fireEvent.click(within(usage).getByRole("button", { name: "90 days" }));
+    await waitFor(() => expect(fetchLocalUsage).toHaveBeenCalledWith(90));
+
+    await act(async () => {
+      resolveNinety(demo.createDemoLocalUsage(Date.now(), 90));
+      await ninety;
+    });
+    expect(
+      await within(usage).findByRole("img", { name: "Daily processed tokens over 90 days" }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSeven(demo.createDemoLocalUsage(Date.now(), 7));
+      await seven;
+    });
+    expect(
+      within(usage).getByRole("img", { name: "Daily processed tokens over 90 days" }),
+    ).toBeInTheDocument();
+    expect(within(usage).getByRole("button", { name: "90 days" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("shows a helpful empty state when nothing is visible", async () => {
     seedPreferences({ enabledProviders: [] });
     render(<App />);
@@ -346,11 +447,27 @@ describe("App", () => {
     expect(await screen.findByRole("region", { name: "Settings" })).toBeInTheDocument();
   });
 
+  it("shows the packaged app version in settings", async () => {
+    seedPreferences();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Claude" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(
+      await screen.findByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          element.textContent?.startsWith(`EyeUrAI v${__APP_VERSION__} ·`) === true,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("summarises the worst quota in the status bar", async () => {
     seedPreferences();
     render(<App />);
-    // Claude · Session sits at 92.9% in the demo data for the stale team account.
-    expect(await screen.findByText(/Claude · Session · 93%/)).toBeInTheDocument();
+    // The stale Claude team account sits at 92.9%, but only live rows may
+    // drive the headline. Gemini's live daily window is the current peak.
+    expect(await screen.findByText(/Gemini · 2.5 Pro · daily · 91%/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude · Session · 93%/)).not.toBeInTheDocument();
   });
 
   it("pins the exact Home quota, replaces it, and unpins it on a second click", async () => {

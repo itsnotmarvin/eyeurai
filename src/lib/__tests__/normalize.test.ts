@@ -180,7 +180,7 @@ describe("normalizeSnapshot", () => {
     });
     expect(snapshot?.accounts[0]).toMatchObject({
       provider: "gemini",
-      status: "error",
+      status: "unsupported",
       label: "Gemini",
     });
     expect(snapshot?.accounts[0]?.message).toContain("Open Google AI Studio");

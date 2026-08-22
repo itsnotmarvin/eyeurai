@@ -32,7 +32,6 @@
 pub mod claude;
 pub mod codex;
 pub mod credentials;
-pub mod demo;
 pub mod error;
 pub mod gemini;
 pub mod jwt;
@@ -47,10 +46,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures_util::future::join_all;
 
 use crate::models::{
-    AccountDescriptor, DataSource, ProviderCapability, ProviderErrorInfo, ProviderId,
-    ProviderSnapshot, ProviderStatus, QuotaSnapshot,
+    AccountDescriptor, AccountSnapshot, DataSource, ProviderCapability, ProviderErrorInfo,
+    ProviderId, ProviderSnapshot, ProviderStatus, QuotaSnapshot,
 };
 
 use self::credentials::{CredentialResolver, LocalCredentialResolver};
@@ -168,6 +168,26 @@ pub fn prefer_managed_accounts(
     results.retain(|account| observed.insert(account.account_id.clone()));
 }
 
+/// Fetch all accounts for one provider concurrently while retaining descriptor
+/// order. The registry still applies one overall provider deadline, and each
+/// adapter's HTTP calls keep their own shorter request deadlines.
+pub(crate) async fn fetch_accounts_concurrently<'a, F, Fut>(
+    accounts: &'a [AccountDescriptor],
+    fetch: F,
+) -> Vec<AccountSnapshot>
+where
+    F: Fn(&'a AccountDescriptor, bool) -> Fut,
+    Fut: Future<Output = AccountSnapshot>,
+{
+    join_all(
+        accounts
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| fetch(descriptor, index == 0)),
+    )
+    .await
+}
+
 /// One provider backend.
 ///
 /// `fetch` is total: it never returns `Err`. A failure is expressed inside the
@@ -216,19 +236,6 @@ impl ProviderRegistry {
 
     pub fn get(&self, id: ProviderId) -> Option<Arc<dyn QuotaProvider>> {
         self.providers.iter().find(|p| p.id() == id).map(Arc::clone)
-    }
-
-    /// Static capability table, no I/O. Ordered by [`ProviderId::ALL`].
-    pub fn capabilities(&self) -> Vec<ProviderCapability> {
-        let mut caps: Vec<ProviderCapability> =
-            self.providers.iter().map(|p| p.capability()).collect();
-        caps.sort_by_key(|c| {
-            ProviderId::ALL
-                .iter()
-                .position(|id| *id == c.provider)
-                .unwrap_or(usize::MAX)
-        });
-        caps
     }
 
     /// Fetch every requested provider concurrently, each under its own budget.
@@ -339,7 +346,7 @@ pub(crate) fn not_configured(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AccountSnapshot, CapabilityLevel, CredentialKind};
+    use crate::models::{AccountSnapshot, CapabilityLevel, CredentialKind, CredentialRef};
 
     #[test]
     fn managed_profiles_win_over_a_cli_row_for_the_same_account() {
@@ -369,6 +376,42 @@ mod tests {
         ];
         prefer_managed_accounts(&mut results, "claude-profile:");
         assert_eq!(results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn account_fetches_start_concurrently_and_preserve_descriptor_order() {
+        let accounts = vec![
+            AccountDescriptor::new(ProviderId::Claude, "first", CredentialRef::None),
+            AccountDescriptor::new(ProviderId::Claude, "second", CredentialRef::None),
+        ];
+        // Both futures must reach the barrier. A sequential implementation
+        // would wait forever on the first future and fail this timeout.
+        let barrier = Arc::new(tokio::sync::Barrier::new(accounts.len()));
+        let results = tokio::time::timeout(
+            Duration::from_secs(1),
+            fetch_accounts_concurrently(&accounts, |descriptor, is_primary| {
+                let barrier = Arc::clone(&barrier);
+                async move {
+                    barrier.wait().await;
+                    let mut account =
+                        AccountSnapshot::new(descriptor.id.clone(), descriptor.fallback_label());
+                    account.active = is_primary;
+                    account
+                }
+            }),
+        )
+        .await
+        .expect("all account reads started concurrently");
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|account| account.account_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert!(results[0].active);
+        assert!(!results[1].active);
     }
 
     struct StubProvider {
@@ -439,7 +482,17 @@ mod tests {
     #[test]
     fn default_registry_exposes_every_known_provider() {
         let registry = ProviderRegistry::with_defaults();
-        let caps = registry.capabilities();
+        let mut caps: Vec<_> = registry
+            .providers
+            .iter()
+            .map(|provider| provider.capability())
+            .collect();
+        caps.sort_by_key(|capability| {
+            ProviderId::ALL
+                .iter()
+                .position(|id| *id == capability.provider)
+                .unwrap_or(usize::MAX)
+        });
         let ids: Vec<ProviderId> = caps.iter().map(|c| c.provider).collect();
         assert_eq!(ids, ProviderId::ALL.to_vec());
         // All adapters must be read-only.

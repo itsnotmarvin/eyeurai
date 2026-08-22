@@ -328,6 +328,7 @@ export function createDemoLocalUsage(
   return {
     generatedAt: new Date(now).toISOString(),
     rangeDays,
+    truncated: false,
     processedTokens: scaled(669_000_000),
     uncachedInputTokens: scaled(9_500_000),
     cachedInputTokens: scaled(647_000_000),

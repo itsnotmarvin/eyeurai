@@ -81,17 +81,17 @@ async function invokeAny<T>(
   const known = resolvedCommand.get(key);
   const order = known ? [known, ...candidates.filter((c) => c !== known)] : candidates;
 
-  let lastError: unknown = null;
+  let primaryError: unknown = null;
   for (const command of order) {
     try {
       const result = await invoke<T>(command, args);
       resolvedCommand.set(key, command);
       return result;
     } catch (error) {
-      lastError = error;
+      primaryError ??= error;
     }
   }
-  if (lastError) throw lastError;
+  if (primaryError) throw primaryError;
   return null;
 }
 
@@ -225,6 +225,7 @@ function normalizeLocalUsage(value: unknown): LocalUsageSnapshot | null {
   return {
     generatedAt,
     rangeDays: Math.max(1, Math.min(90, safeCount(row.rangeDays) || 7)),
+    truncated: row.truncated === true,
     processedTokens: safeCount(row.processedTokens),
     uncachedInputTokens: safeCount(row.uncachedInputTokens),
     cachedInputTokens: safeCount(row.cachedInputTokens),

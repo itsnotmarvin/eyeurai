@@ -77,6 +77,12 @@ describe("AccountCard", () => {
     expect(screen.getByText("Live")).toBeInTheDocument();
   });
 
+  it("presents unconfigured providers neutrally", () => {
+    renderCard(makeAccount({ status: "unconfigured", windows: [] }));
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("surfaces stale data with its explanation", () => {
     renderCard(makeAccount({ status: "stale", message: "Claude Code was not running." }));
 

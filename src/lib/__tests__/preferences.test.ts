@@ -84,6 +84,15 @@ describe("sanitizePreferences", () => {
     expect(sanitizePreferences({ refreshIntervalSeconds: "15" }).refreshIntervalSeconds).toBe(60);
   });
 
+  it("preserves existing users' launch-at-login choice and defaults only fresh installs", () => {
+    expect(sanitizePreferences({ version: 1 }).launchAtLoginConfigured).toBe(true);
+    expect(sanitizePreferences({ onboardingCompleted: true }).launchAtLoginConfigured).toBe(true);
+    expect(sanitizePreferences({}).launchAtLoginConfigured).toBe(false);
+    expect(sanitizePreferences({ launchAtLoginConfigured: true }).launchAtLoginConfigured).toBe(
+      true,
+    );
+  });
+
   it("keeps supported appearance choices and rejects unknown ones", () => {
     const valid = sanitizePreferences({
       appearanceTheme: "lichen",
@@ -211,6 +220,7 @@ describe("storage", () => {
       "criticalThreshold",
       "disconnectedAccounts",
       "enabledProviders",
+      "launchAtLoginConfigured",
       "localUsageEnabled",
       "notificationsEnabled",
       "onboardingCompleted",
