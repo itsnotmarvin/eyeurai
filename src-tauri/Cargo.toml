@@ -1,6 +1,6 @@
 [package]
 name = "eyeurai"
-version = "1.2.2"
+version = "1.2.3"
 description = "A private menu-bar monitor for AI subscription limits"
 authors = ["EyeUrAI contributors"]
 license = "MIT"
