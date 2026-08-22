@@ -249,6 +249,7 @@ async fn fetch_one(
         Ok(value) => match parse_usage(&value, now) {
             Ok(windows) => {
                 let mut snapshot = AccountSnapshot::new(account_id.clone(), label);
+                snapshot.principal_id = principal_fingerprint(profile.as_ref());
                 snapshot.plan = plan;
                 snapshot.active = is_active;
                 snapshot.windows = windows;
@@ -258,6 +259,7 @@ async fn fetch_one(
             Err(err) => {
                 let mut snapshot =
                     AccountSnapshot::failed(account_id.clone(), label, err.to_info());
+                snapshot.principal_id = principal_fingerprint(profile.as_ref());
                 snapshot.plan = plan;
                 snapshot.active = is_active;
                 snapshot
@@ -269,6 +271,7 @@ async fn fetch_one(
                 _ => err,
             };
             let mut snapshot = AccountSnapshot::failed(account_id, label, err.to_info());
+            snapshot.principal_id = principal_fingerprint(profile.as_ref());
             snapshot.plan = plan;
             snapshot.active = is_active;
             snapshot
@@ -333,6 +336,16 @@ fn stable_account_id(descriptor: &AccountDescriptor, profile: Option<&ClaudeProf
                 })
         })
         .unwrap_or_else(|| descriptor.id.clone())
+}
+
+/// Exact provider identity only. Email is a useful fallback for a durable CLI
+/// row id, but is intentionally insufficient for merging two credential
+/// connections automatically.
+fn principal_fingerprint(profile: Option<&ClaudeProfile>) -> Option<String> {
+    profile?
+        .account_id
+        .as_deref()
+        .and_then(|identity| prefixed_identity("claude:", identity, false))
 }
 
 fn prefixed_identity(prefix: &str, identity: &str, lowercase: bool) -> Option<String> {

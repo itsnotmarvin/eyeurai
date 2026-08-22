@@ -185,6 +185,9 @@ async fn fetch_one(
                 .with_remediation(LOGIN_HINT)
                 .to_info(),
         );
+        snapshot.principal_id = account_id
+            .starts_with("codex:")
+            .then_some(account_id.clone());
         snapshot.plan = plan;
         snapshot.active = is_primary;
         return snapshot;
@@ -203,13 +206,30 @@ async fn fetch_one(
         Ok(value) => match parse_usage(&value, now) {
             Ok(windows) => {
                 let mut snapshot = AccountSnapshot::new(account_id.clone(), label);
+                snapshot.principal_id = account_id
+                    .starts_with("codex:")
+                    .then_some(account_id.clone());
                 snapshot.windows = windows;
                 snapshot.freshness = Freshness::live(now);
                 snapshot
             }
-            Err(err) => AccountSnapshot::failed(account_id.clone(), label, err.to_info()),
+            Err(err) => {
+                let mut snapshot =
+                    AccountSnapshot::failed(account_id.clone(), label, err.to_info());
+                snapshot.principal_id = account_id
+                    .starts_with("codex:")
+                    .then_some(account_id.clone());
+                snapshot
+            }
         },
-        Err(err) => AccountSnapshot::failed(account_id, label, annotate(err).to_info()),
+        Err(err) => {
+            let principal_id = account_id
+                .starts_with("codex:")
+                .then_some(account_id.clone());
+            let mut snapshot = AccountSnapshot::failed(account_id, label, annotate(err).to_info());
+            snapshot.principal_id = principal_id;
+            snapshot
+        }
     };
 
     snapshot.plan = plan;
@@ -254,6 +274,10 @@ async fn fetch_managed_profile(
         }
         Err(error) => AccountSnapshot::failed(account_id, label, error.to_info()),
     };
+    snapshot.principal_id = managed
+        .account_id
+        .as_deref()
+        .and_then(|identity| prefixed_identity("codex:", identity, false));
     snapshot.plan = managed.plan.map(|plan| pretty_plan(&plan));
     // Isolated profiles remain independently readable even when another Codex
     // account is added, so they are active rather than historical cache rows.

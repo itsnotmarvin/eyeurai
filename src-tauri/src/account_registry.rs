@@ -112,27 +112,25 @@ impl AccountSnapshotRegistry {
                 .accounts
                 .retain(|account| !excluded_account_ids.contains(&account.account_id));
 
-            // Early isolated-Codex builds keyed managed profiles by an email
-            // hash (`codex:<hash>`). The durable profile ID is now the source
-            // of truth so failures and disconnects keep the same identity.
-            // Migrate a matching legacy row once its managed profile is read.
-            if provider.provider == ProviderId::Codex {
-                let managed_labels: BTreeSet<String> = provider
-                    .accounts
-                    .iter()
-                    .filter(|account| {
-                        account.account_id.starts_with("codex-profile:")
-                            && account.status == ProviderStatus::Ok
-                    })
-                    .map(|account| account.label.to_ascii_lowercase())
-                    .collect();
+            // A newly managed connection can supersede a retained terminal
+            // observation, but only when both expose the exact same provider
+            // principal fingerprint. Never merge by email/label alone.
+            let managed_principals: BTreeSet<String> = provider
+                .accounts
+                .iter()
+                .filter(|account| {
+                    (account.account_id.starts_with("claude-profile:")
+                        || account.account_id.starts_with("codex-profile:"))
+                        && account.status == ProviderStatus::Ok
+                })
+                .filter_map(|account| account.principal_id.clone())
+                .collect();
+            if !managed_principals.is_empty() {
                 let before = self.accounts.len();
-                self.accounts
-                    .retain(|(stored_provider, account_id), account| {
-                        !(*stored_provider == ProviderId::Codex
-                            && account_id.starts_with("codex:")
-                            && managed_labels.contains(&account.label.to_ascii_lowercase()))
-                    });
+                self.accounts.retain(|(stored_provider, account_id), _| {
+                    !(*stored_provider == provider.provider
+                        && managed_principals.contains(account_id))
+                });
                 changed |= self.accounts.len() != before;
             }
 
@@ -657,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_codex_email_identity_migrates_to_durable_profile_identity() {
+    fn exact_provider_identity_migrates_to_durable_profile_identity() {
         let directory = TestDirectory::new("codex-profile-migration");
         let mut registry = AccountSnapshotRegistry::load(&directory.0).expect("load empty");
         let excluded = BTreeSet::new();
@@ -680,6 +678,7 @@ mod tests {
             43.0,
             ts(6_100),
         );
+        managed.providers[0].accounts[0].principal_id = Some("codex:legacy-email-hash".to_string());
         registry
             .reconcile(&mut managed, &excluded)
             .expect("migrate managed profile");
@@ -693,5 +692,34 @@ mod tests {
             managed.providers[0].accounts[0].windows[0].used_percent,
             Some(43.0)
         );
+    }
+
+    #[test]
+    fn matching_email_without_provider_identity_keeps_both_accounts() {
+        let directory = TestDirectory::new("codex-profile-ambiguous-email");
+        let mut registry = AccountSnapshotRegistry::load(&directory.0).expect("load empty");
+        let excluded = BTreeSet::new();
+        let mut terminal = live_snapshot(
+            ProviderId::Codex,
+            "codex:terminal-principal",
+            "shared@example.com",
+            42.0,
+            ts(7_000),
+        );
+        registry
+            .reconcile(&mut terminal, &excluded)
+            .expect("persist terminal");
+
+        let mut managed = live_snapshot(
+            ProviderId::Codex,
+            "codex-profile:profile-second",
+            "shared@example.com",
+            43.0,
+            ts(7_100),
+        );
+        registry
+            .reconcile(&mut managed, &excluded)
+            .expect("reconcile managed");
+        assert_eq!(managed.providers[0].accounts.len(), 2);
     }
 }

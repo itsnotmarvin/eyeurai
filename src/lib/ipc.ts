@@ -5,8 +5,10 @@ import type {
   LocalUsageProviderSummary,
   LocalUsageSnapshot,
   Snapshot,
+  ProviderId,
 } from "../types/quota";
 import { normalizeSnapshot } from "./normalize";
+import { normalizeProvider } from "./normalize";
 
 /**
  * Thin Tauri IPC client.
@@ -27,6 +29,7 @@ const START_CODEX_LOGIN_COMMANDS = ["start_codex_account_login"] as const;
 const CODEX_LOGIN_EVENT = "eyeurai://codex-profile-login";
 const START_CLAUDE_LOGIN_COMMANDS = ["start_claude_account_login"] as const;
 const CLAUDE_LOGIN_EVENT = "eyeurai://claude-profile-login";
+const EXECUTE_REMEDIATION_COMMANDS = ["execute_remediation"] as const;
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
@@ -45,6 +48,22 @@ export interface ProfileLoginEvent {
 
 export type CodexLoginStarted = ProfileLoginStarted;
 export type CodexLoginEvent = ProfileLoginEvent;
+
+export type RemediationExecution =
+  | {
+      kind: "login_started";
+      provider: ProviderId;
+      profileId: string;
+      targetAccountId: string | null;
+    }
+  | {
+      kind: "terminal_opened";
+      provider: ProviderId;
+      command: string;
+      targetAccountId: string | null;
+    }
+  | { kind: "refresh_requested"; provider: ProviderId }
+  | { kind: "open_settings"; provider: ProviderId; openConnection: boolean };
 
 let invokeCache: InvokeFn | null | undefined;
 const resolvedCommand = new Map<string, string>();
@@ -129,6 +148,45 @@ export async function startClaudeAccountLogin(): Promise<ProfileLoginStarted | n
     "claude-login-start",
     START_CLAUDE_LOGIN_COMMANDS,
   );
+}
+
+/** Executes one opaque, backend-authored recovery choice. */
+export async function executeRemediation(
+  planId: string,
+  choiceId: string,
+): Promise<RemediationExecution | null> {
+  const raw = await invokeAny<unknown>("execute-remediation", EXECUTE_REMEDIATION_COMMANDS, {
+    planId,
+    choiceId,
+  });
+  if (typeof raw !== "object" || raw === null) return null;
+  const row = raw as Record<string, unknown>;
+  const kind = typeof row.kind === "string" ? row.kind : "";
+  const provider = normalizeProvider(row.provider);
+  if (!provider) return null;
+  if (kind === "login_started" && typeof row.profileId === "string") {
+    return {
+      kind,
+      provider,
+      profileId: row.profileId,
+      targetAccountId: typeof row.targetAccountId === "string" ? row.targetAccountId : null,
+    };
+  }
+  if (kind === "terminal_opened" && typeof row.command === "string") {
+    return {
+      kind,
+      provider,
+      command: row.command,
+      targetAccountId: typeof row.targetAccountId === "string" ? row.targetAccountId : null,
+    };
+  }
+  if (kind === "refresh_requested") {
+    return { kind, provider };
+  }
+  if (kind === "open_settings") {
+    return { kind, provider, openConnection: row.openConnection === true };
+  }
+  return null;
 }
 
 async function subscribeToProfileLogin(

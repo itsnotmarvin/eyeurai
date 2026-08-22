@@ -11,6 +11,7 @@ mod local_usage;
 mod models;
 mod profile_store;
 mod providers;
+mod remediation;
 
 const MAX_TRAY_LABEL_CHARS: usize = 8;
 
@@ -336,6 +337,7 @@ pub fn run() {
             commands::refresh_quotas,
             commands::start_claude_account_login,
             commands::start_codex_account_login,
+            commands::execute_remediation,
             local_usage::scan_local_usage,
             set_tray_display,
         ])

@@ -22,6 +22,7 @@ export interface ProviderSectionProps {
     display: PinnedQuotaDisplay,
   ) => void;
   onRetry?: () => void;
+  onRemediate?: (account: Account) => void;
 }
 
 /** Highest usage across every window of every account in the group. */
@@ -44,6 +45,7 @@ export function ProviderSection({
   pinnedQuota,
   onToggleQuotaPin,
   onRetry,
+  onRemediate,
 }: ProviderSectionProps) {
   const meta = PROVIDER_META[provider];
   const peak = peakPercent(accounts);
@@ -78,6 +80,7 @@ export function ProviderSection({
             pinnedQuota={pinnedQuota}
             onToggleQuotaPin={onToggleQuotaPin}
             onRetry={onRetry}
+            onRemediate={onRemediate}
           />
         ))}
       </div>

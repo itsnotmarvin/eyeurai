@@ -162,6 +162,66 @@ describe("normalizeSnapshot", () => {
     ]);
   });
 
+  it("preserves backend-authored remediation plans without flattening their command", () => {
+    const snapshot = normalizeSnapshot({
+      providers: [
+        {
+          provider: "claude",
+          accounts: [
+            {
+              account_id: "claude:principal",
+              label: "work@example.com",
+              active: false,
+              status: "not_configured",
+              error: {
+                message: "This account is not the current Claude Code login.",
+                remediation: "Run `claude /login`.",
+              },
+              remediation_plan: {
+                plan_id: "opaque-plan",
+                title: "Reconnect this Claude account?",
+                detail: "Choose a safe path.",
+                choices: [
+                  {
+                    choice_id: "managed-login",
+                    kind: "managed_login",
+                    label: "Reconnect inside EyeUrAI",
+                    impact: "app_only",
+                  },
+                  {
+                    choice_id: "open-terminal",
+                    kind: "open_terminal",
+                    label: "Switch Claude Code account…",
+                    command_preview: "claude /login",
+                    impact: "global_cli_identity",
+                  },
+                ],
+              },
+              freshness: { source: "cache", stale: true },
+              windows: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(snapshot?.accounts[0]?.message).toBe(
+      "This account is not the current Claude Code login.",
+    );
+    expect(snapshot?.accounts[0]?.remediation).toMatchObject({
+      id: "opaque-plan",
+      choices: [
+        { id: "managed-login", kind: "managed-login", impact: "app-only" },
+        {
+          id: "open-terminal",
+          kind: "open-terminal",
+          commandPreview: "claude /login",
+          impact: "global-cli-identity",
+        },
+      ],
+    });
+  });
+
   it("turns a provider-level unsupported state into a visible card", () => {
     const snapshot = normalizeSnapshot({
       providers: [

@@ -62,6 +62,7 @@ pub struct CodexLoginEvent {
 
 #[derive(Debug)]
 pub struct ManagedCodexAccount {
+    pub account_id: Option<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
     pub rate_limits: Value,
@@ -227,6 +228,13 @@ async fn read_managed_account_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let account_id = account
+        .get("accountId")
+        .or_else(|| account.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let plan = account
         .get("planType")
         .and_then(Value::as_str)
@@ -243,6 +251,7 @@ async fn read_managed_account_inner(
         .ok_or_else(|| ProviderError::parse("Codex returned no rate-limit snapshot"))?;
 
     Ok(ManagedCodexAccount {
+        account_id,
         email,
         plan,
         rate_limits,

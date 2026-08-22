@@ -31,6 +31,7 @@ import { LocalUsagePanel } from "./components/LocalUsagePanel";
 import { SkeletonList } from "./components/Skeleton";
 import { StatusBar } from "./components/StatusBar";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { RemediationDialog } from "./components/RemediationDialog";
 
 type View = "dashboard" | "settings";
 
@@ -86,6 +87,8 @@ export function App() {
   const [localUsageLoading, setLocalUsageLoading] = useState(false);
   const [localUsageError, setLocalUsageError] = useState<string | null>(null);
   const [usageConsentOpen, setUsageConsentOpen] = useState(false);
+  const [remediationAccount, setRemediationAccount] = useState<Account | null>(null);
+  const [settingsConnectionProvider, setSettingsConnectionProvider] = useState<ProviderId | null>(null);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(
     () =>
       import.meta.env.DEV &&
@@ -356,6 +359,7 @@ export function App() {
         onReconnectAccount={reconnectAccount}
         onRefreshAccounts={refreshAll}
         onRequestLocalUsage={() => setUsageConsentOpen(true)}
+        initialConnectProvider={settingsConnectionProvider}
         onRerunSetup={() => {
           update({ onboardingCompleted: false });
           setView("dashboard");
@@ -408,6 +412,7 @@ export function App() {
             pinnedQuota={preferences.pinnedQuota}
             onToggleQuotaPin={togglePinnedQuota}
             onRetry={refreshAll}
+            onRemediate={setRemediationAccount}
           />
         ))}
         {hiddenProviders.length > 0 ? (
@@ -492,6 +497,20 @@ export function App() {
             error={appUpdate.error}
             onInstall={() => void appUpdate.install()}
             onClose={() => setUpdateDialogOpen(false)}
+          />
+        ) : null}
+        {remediationAccount?.remediation ? (
+          <RemediationDialog
+            account={remediationAccount}
+            accounts={monitoredSnapshot?.accounts ?? []}
+            plan={remediationAccount.remediation}
+            onRefresh={refreshAll}
+            onClose={() => setRemediationAccount(null)}
+            onOpenSettings={(provider) => {
+              setSettingsConnectionProvider(provider);
+              setRemediationAccount(null);
+              setView("settings");
+            }}
           />
         ) : null}
       </div>

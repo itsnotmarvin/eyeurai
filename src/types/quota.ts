@@ -54,6 +54,30 @@ export type AccountStatus =
 /** How the credential for an account was discovered. Never includes secrets. */
 export type AuthSource = "oauth" | "api-key" | "cli" | "unknown";
 
+export type RemediationChoiceKind =
+  | "managed-login"
+  | "open-terminal"
+  | "retry"
+  | "open-settings";
+
+export type RemediationImpact = "app-only" | "global-cli-identity" | "read-only";
+
+export interface RemediationChoice {
+  id: string;
+  kind: RemediationChoiceKind;
+  label: string;
+  detail: string | null;
+  commandPreview: string | null;
+  impact: RemediationImpact;
+}
+
+export interface RemediationPlan {
+  id: string;
+  title: string;
+  detail: string;
+  choices: RemediationChoice[];
+}
+
 /** A single stacked quota bar inside an account card. */
 export interface QuotaWindow {
   /** Stable id, unique within the owning account. */
@@ -92,6 +116,8 @@ export interface Account {
   status: AccountStatus;
   /** Human readable detail for `stale` / `error` states. */
   message: string | null;
+  /** Short-lived actions authorized by the latest backend diagnosis. */
+  remediation?: RemediationPlan | null;
   /** RFC 3339 timestamp of the last successful read. */
   updatedAt: string | null;
   windows: QuotaWindow[];

@@ -147,22 +147,26 @@ impl ProviderContext {
     }
 }
 
-/// Collapse duplicate rows when the user adds the same account their
-/// terminal login already uses: the independently managed profile (whose id
-/// starts with `managed_prefix`) wins, every distinct managed profile stays,
-/// and exact account-id duplicates keep their first occurrence.
+/// Collapse duplicate rows only when both connections expose the same stable
+/// provider-principal fingerprint. Labels (including email addresses) are not
+/// identity: two workspace principals can legitimately share one. The
+/// independently managed profile wins exact matches, while ambiguous rows
+/// remain visible and exact account-id duplicates keep their first occurrence.
 pub fn prefer_managed_accounts(
     results: &mut Vec<crate::models::AccountSnapshot>,
     managed_prefix: &str,
 ) {
-    let managed_labels: std::collections::BTreeSet<String> = results
+    let managed_principals: std::collections::BTreeSet<String> = results
         .iter()
         .filter(|account| account.account_id.starts_with(managed_prefix))
-        .map(|account| account.label.to_ascii_lowercase())
+        .filter_map(|account| account.principal_id.clone())
         .collect();
     results.retain(|account| {
         account.account_id.starts_with(managed_prefix)
-            || !managed_labels.contains(&account.label.to_ascii_lowercase())
+            || account
+                .principal_id
+                .as_ref()
+                .map_or(true, |principal| !managed_principals.contains(principal))
     });
     let mut observed = std::collections::BTreeSet::new();
     results.retain(|account| observed.insert(account.account_id.clone()));
@@ -350,9 +354,13 @@ mod tests {
 
     #[test]
     fn managed_profiles_win_over_a_cli_row_for_the_same_account() {
+        let mut terminal = AccountSnapshot::new("claude:abc123", "Dev@Example.com");
+        terminal.principal_id = Some("claude:abc123".to_string());
+        let mut managed = AccountSnapshot::new("claude-profile:profile-1", "dev@example.com");
+        managed.principal_id = Some("claude:abc123".to_string());
         let mut results = vec![
-            AccountSnapshot::new("claude:abc123", "Dev@Example.com"),
-            AccountSnapshot::new("claude-profile:profile-1", "dev@example.com"),
+            terminal,
+            managed,
             AccountSnapshot::new("claude-profile:profile-2", "work@example.com"),
             AccountSnapshot::new("claude:def456", "other@example.com"),
         ];
@@ -366,6 +374,16 @@ mod tests {
                 "claude:def456"
             ]
         );
+    }
+
+    #[test]
+    fn matching_email_without_provider_identity_never_merges_accounts() {
+        let mut results = vec![
+            AccountSnapshot::new("claude:terminal", "shared@example.com"),
+            AccountSnapshot::new("claude-profile:profile-1", "shared@example.com"),
+        ];
+        prefer_managed_accounts(&mut results, "claude-profile:");
+        assert_eq!(results.len(), 2);
     }
 
     #[test]

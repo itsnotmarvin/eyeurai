@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::account_registry::AccountSnapshotRegistry;
@@ -15,12 +16,14 @@ use crate::codex_profiles::{self, CodexLoginStarted};
 use crate::models::{AccountDescriptor, ProviderId, QuotaSnapshot};
 use crate::providers::credentials::default_descriptors;
 use crate::providers::{ProviderContext, ProviderRegistry};
+use crate::remediation::{self, AuthorizedAction, RemediationStore};
 
 pub struct AppState {
     registry: Arc<ProviderRegistry>,
     context: Arc<ProviderContext>,
     app_data_dir: PathBuf,
     account_registry: RwLock<AccountSnapshotRegistry>,
+    remediation: RwLock<RemediationStore>,
     cache: RwLock<Option<CachedSnapshot>>,
 }
 
@@ -40,6 +43,7 @@ impl AppState {
             context: Arc::new(context),
             app_data_dir,
             account_registry: RwLock::new(account_registry),
+            remediation: RwLock::new(RemediationStore::default()),
             cache: RwLock::new(None),
         })
     }
@@ -87,6 +91,9 @@ impl AppState {
                 eprintln!("EyeUrAI could not persist the account snapshot registry");
             }
         }
+        if let Ok(mut remediation) = self.remediation.write() {
+            remediation.install(&mut snapshot);
+        }
         if let Ok(mut cache) = self.cache.write() {
             *cache = Some(CachedSnapshot {
                 excluded_account_ids,
@@ -94,6 +101,108 @@ impl AppState {
             });
         }
         snapshot
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemediationExecution {
+    LoginStarted {
+        provider: ProviderId,
+        #[serde(rename = "profileId")]
+        profile_id: String,
+        #[serde(rename = "targetAccountId")]
+        target_account_id: Option<String>,
+    },
+    TerminalOpened {
+        provider: ProviderId,
+        command: String,
+        #[serde(rename = "targetAccountId")]
+        target_account_id: Option<String>,
+    },
+    RefreshRequested {
+        provider: ProviderId,
+    },
+    OpenSettings {
+        provider: ProviderId,
+        #[serde(rename = "openConnection")]
+        open_connection: bool,
+    },
+}
+
+/// Execute one choice from the latest backend-authored diagnosis. Plan ids
+/// are replaced on every refresh, so a button from an older account state is
+/// rejected instead of performing a now-inappropriate side effect.
+#[tauri::command]
+pub async fn execute_remediation(
+    app: AppHandle,
+    plan_id: String,
+    choice_id: String,
+    state: State<'_, AppState>,
+) -> Result<RemediationExecution, String> {
+    if plan_id.len() > 80 || choice_id.len() > 40 {
+        return Err("This repair action is invalid. Refresh and try again.".to_string());
+    }
+    let action = state
+        .remediation
+        .read()
+        .ok()
+        .and_then(|store| store.resolve(&plan_id, &choice_id))
+        .ok_or_else(|| "This repair action is out of date. Refresh and try again.".to_string())?;
+
+    match action {
+        AuthorizedAction::ManagedLogin {
+            provider: ProviderId::Claude,
+            account_id,
+        } => {
+            let http = state.context.http.clone();
+            let user_agent = state.context.user_agent(ProviderId::Claude).to_string();
+            let started = claude_profiles::start_login(app, &state.app_data_dir, http, user_agent)
+                .await
+                .map_err(|error| error.message)?;
+            Ok(RemediationExecution::LoginStarted {
+                provider: ProviderId::Claude,
+                profile_id: started.profile_id,
+                target_account_id: account_id,
+            })
+        }
+        AuthorizedAction::ManagedLogin {
+            provider: ProviderId::Codex,
+            account_id,
+        } => {
+            let started = codex_profiles::start_login(app, &state.app_data_dir)
+                .await
+                .map_err(|error| error.message)?;
+            Ok(RemediationExecution::LoginStarted {
+                provider: ProviderId::Codex,
+                profile_id: started.profile_id,
+                target_account_id: account_id,
+            })
+        }
+        AuthorizedAction::ManagedLogin { .. } => {
+            Err("This provider does not support an EyeUrAI sign-in.".to_string())
+        }
+        AuthorizedAction::OpenTerminal {
+            provider,
+            account_id,
+        } => {
+            let command = remediation::open_terminal(provider, &state.app_data_dir)?;
+            Ok(RemediationExecution::TerminalOpened {
+                provider,
+                command: command.to_string(),
+                target_account_id: account_id,
+            })
+        }
+        AuthorizedAction::Retry { provider } => {
+            Ok(RemediationExecution::RefreshRequested { provider })
+        }
+        AuthorizedAction::OpenSettings {
+            provider,
+            open_connection,
+        } => Ok(RemediationExecution::OpenSettings {
+            provider,
+            open_connection,
+        }),
     }
 }
 
@@ -234,5 +343,19 @@ mod tests {
         assert!(descriptors
             .iter()
             .all(|descriptor| !descriptor_is_excluded(descriptor, &exclusions)));
+    }
+
+    #[test]
+    fn remediation_execution_uses_the_frontend_wire_names() {
+        let value = serde_json::to_value(RemediationExecution::LoginStarted {
+            provider: ProviderId::Claude,
+            profile_id: "profile-1".to_string(),
+            target_account_id: Some("claude:principal".to_string()),
+        })
+        .expect("serialize execution");
+        assert_eq!(value["kind"], "login_started");
+        assert_eq!(value["profileId"], "profile-1");
+        assert_eq!(value["targetAccountId"], "claude:principal");
+        assert!(value.get("profile_id").is_none());
     }
 }

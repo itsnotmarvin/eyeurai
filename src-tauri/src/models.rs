@@ -748,6 +748,11 @@ impl CapabilityOption {
 pub struct AccountSnapshot {
     /// Mirrors [`AccountDescriptor::id`].
     pub account_id: String,
+    /// Optional provider-principal fingerprint used only for exact automatic
+    /// deduplication. It is deliberately not serialized to the webview or the
+    /// on-disk last-known registry.
+    #[serde(default, skip_serializing)]
+    pub principal_id: Option<String>,
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
@@ -758,12 +763,18 @@ pub struct AccountSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ProviderErrorInfo>,
     pub freshness: Freshness,
+    /// A short-lived, secret-free action plan created after diagnosis. The
+    /// opaque id is resolved only by the Rust backend; the webview never sends
+    /// commands, URLs, or credential locations of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation_plan: Option<RemediationPlan>,
 }
 
 impl AccountSnapshot {
     pub fn new(account_id: impl Into<String>, label: impl Into<String>) -> Self {
         AccountSnapshot {
             account_id: account_id.into(),
+            principal_id: None,
             label: label.into(),
             plan: None,
             active: false,
@@ -771,6 +782,7 @@ impl AccountSnapshot {
             windows: Vec::new(),
             error: None,
             freshness: Freshness::none(),
+            remediation_plan: None,
         }
     }
 
@@ -797,6 +809,45 @@ impl AccountSnapshot {
     }
 }
 
+/// A backend-authorized set of ways to recover one account/provider state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemediationPlan {
+    pub plan_id: String,
+    pub title: String,
+    pub detail: String,
+    pub choices: Vec<RemediationChoice>,
+}
+
+/// One specific user-facing action in a remediation plan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemediationChoice {
+    pub choice_id: String,
+    pub kind: RemediationChoiceKind,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_preview: Option<String>,
+    pub impact: RemediationImpact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemediationChoiceKind {
+    ManagedLogin,
+    OpenTerminal,
+    Retry,
+    OpenSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemediationImpact {
+    AppOnly,
+    GlobalCliIdentity,
+    ReadOnly,
+}
+
 /// One provider's contribution to a snapshot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
@@ -808,6 +859,8 @@ pub struct ProviderSnapshot {
     /// unsupported). Per-account failures live on the account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ProviderErrorInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation_plan: Option<RemediationPlan>,
     pub freshness: Freshness,
     pub capability: ProviderCapability,
 }
@@ -820,6 +873,7 @@ impl ProviderSnapshot {
             status: ProviderStatus::Ok,
             accounts: Vec::new(),
             error: None,
+            remediation_plan: None,
             freshness: Freshness::none(),
             capability,
         }

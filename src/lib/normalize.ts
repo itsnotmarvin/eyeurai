@@ -7,6 +7,10 @@ import {
   type QuotaKind,
   type QuotaUnit,
   type QuotaWindow,
+  type RemediationChoice,
+  type RemediationChoiceKind,
+  type RemediationImpact,
+  type RemediationPlan,
   type Snapshot,
 } from "../types/quota";
 import { clampPercent } from "./format";
@@ -66,12 +70,12 @@ function asMeasureValue(value: unknown): number | null {
   return asOptionalNumber(value);
 }
 
-function asErrorMessage(value: unknown): string | null {
+function asErrorMessage(value: unknown, includeLegacyRemediation = true): string | null {
   if (typeof value === "string") return asOptionalString(value);
   if (!isObject(value)) return null;
   const message = asOptionalString(pick(value, "message"));
   const remediation = asOptionalString(pick(value, "remediation"));
-  if (message && remediation) return `${message}. ${remediation}`;
+  if (includeLegacyRemediation && message && remediation) return `${message}. ${remediation}`;
   return message ?? remediation;
 }
 
@@ -221,6 +225,51 @@ function normalizeStatus(raw: unknown, stale: boolean): AccountStatus {
   return "fresh";
 }
 
+const REMEDIATION_KINDS: readonly RemediationChoiceKind[] = [
+  "managed-login",
+  "open-terminal",
+  "retry",
+  "open-settings",
+];
+const REMEDIATION_IMPACTS: readonly RemediationImpact[] = [
+  "app-only",
+  "global-cli-identity",
+  "read-only",
+];
+
+function normalizeRemediationChoice(raw: unknown): RemediationChoice | null {
+  if (!isObject(raw)) return null;
+  const id = asOptionalString(pick(raw, "choiceId") ?? pick(raw, "id"));
+  const label = asOptionalString(pick(raw, "label"));
+  if (!id || !label) return null;
+  return {
+    id,
+    kind: normalizeEnum(pick(raw, "kind"), REMEDIATION_KINDS, "retry"),
+    label,
+    detail: asOptionalString(pick(raw, "detail")),
+    commandPreview: asOptionalString(pick(raw, "commandPreview")),
+    impact: normalizeEnum(pick(raw, "impact"), REMEDIATION_IMPACTS, "read-only"),
+  };
+}
+
+function normalizeRemediationPlan(raw: unknown): RemediationPlan | null {
+  if (!isObject(raw)) return null;
+  const id = asOptionalString(pick(raw, "planId") ?? pick(raw, "id"));
+  const title = asOptionalString(pick(raw, "title"));
+  const rawChoices = pick(raw, "choices");
+  if (!id || !title || !Array.isArray(rawChoices)) return null;
+  const choices = rawChoices
+    .map(normalizeRemediationChoice)
+    .filter((choice): choice is RemediationChoice => choice !== null);
+  if (choices.length === 0) return null;
+  return {
+    id,
+    title,
+    detail: asString(pick(raw, "detail")),
+    choices,
+  };
+}
+
 function normalizeAccount(
   raw: unknown,
   index: number,
@@ -242,6 +291,7 @@ function normalizeAccount(
   const status = normalizeStatus(pick(raw, "status"), asBoolean(freshness?.stale, false));
   const ownError = pick(raw, "error");
   const rawSource = pick(raw, "source");
+  const remediation = normalizeRemediationPlan(pick(raw, "remediationPlan"));
 
   return {
     id: asString(pick(raw, "id") ?? pick(raw, "accountId"), `${provider}-${index}`),
@@ -256,8 +306,9 @@ function normalizeAccount(
     status,
     message:
       asOptionalString(pick(raw, "message")) ??
-      asErrorMessage(ownError) ??
-      asErrorMessage(inheritedError),
+      asErrorMessage(ownError, !remediation) ??
+      asErrorMessage(inheritedError, !remediation),
+    remediation,
     updatedAt: normalizeIsoDate(
       pick(raw, "updatedAt") ??
         pick(raw, "lastUpdated") ??
@@ -281,6 +332,7 @@ function normalizeProviderSnapshot(raw: unknown, providerIndex: number): Account
 
   const displayName = asString(pick(raw, "displayName"), PROVIDER_META_NAME[provider]);
   const freshness = isObject(pick(raw, "freshness")) ? (pick(raw, "freshness") as Json) : null;
+  const remediation = normalizeRemediationPlan(pick(raw, "remediationPlan"));
   return [
     {
       id: `${provider}-status-${providerIndex}`,
@@ -289,7 +341,8 @@ function normalizeProviderSnapshot(raw: unknown, providerIndex: number): Account
       plan: null,
       source: defaultSource(provider),
       status: normalizeStatus(pick(raw, "status"), asBoolean(freshness?.stale, false)),
-      message: asErrorMessage(providerError),
+      message: asErrorMessage(providerError, !remediation),
+      remediation,
       updatedAt: normalizeIsoDate(freshness ? pick(freshness, "fetchedAt") : undefined),
       windows: [],
     },

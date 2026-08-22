@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   APPEARANCE_THEMES,
@@ -47,6 +47,8 @@ export interface SettingsViewProps {
   onRequestLocalUsage: () => void;
   appVersion?: string;
   requestPermission?: () => Promise<boolean>;
+  /** Opens the connection sheet directly when remediation routes here. */
+  initialConnectProvider?: ProviderId | null;
 }
 
 const LOGIN_FLOW_COPY: Record<
@@ -157,6 +159,7 @@ export function SettingsView({
   onRequestLocalUsage,
   appVersion = "unknown",
   requestPermission,
+  initialConnectProvider,
 }: SettingsViewProps) {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -181,6 +184,16 @@ export function SettingsView({
     connectProvider === "openai" || connectProvider === "claude"
       ? loginFlows[connectProvider]
       : null;
+
+  useEffect(() => {
+    if (!initialConnectProvider) return;
+    setConnectProvider(initialConnectProvider);
+    if (initialConnectProvider === "openai") codexFlow.reset();
+    if (initialConnectProvider === "claude") claudeFlow.reset();
+    setConnectOpen(true);
+    // The profile flows are stable for the mounted settings view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConnectProvider]);
   const askForPermission = requestPermission ?? ensureNotificationPermission;
   const connectedAccounts = accounts.filter((account) => !/-status-\d+$/.test(account.id));
   const pinnedAccount = preferences.pinnedQuota

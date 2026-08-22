@@ -54,6 +54,7 @@ export interface AccountCardProps {
     display: PinnedQuotaDisplay,
   ) => void;
   onRetry?: () => void;
+  onRemediate?: (account: Account) => void;
 }
 
 function AccountCardImpl({
@@ -64,6 +65,7 @@ function AccountCardImpl({
   pinnedQuota,
   onToggleQuotaPin,
   onRetry,
+  onRemediate,
 }: AccountCardProps) {
   const meta = PROVIDER_META[account.provider];
   const accountName = `${meta.name} · ${account.label}`;
@@ -130,7 +132,16 @@ function AccountCardImpl({
         <p className="account__message" role={account.status === "error" ? "alert" : undefined}>
           <AlertIcon size={13} />
           <span>{account.message}</span>
-          {account.status === "error" && onRetry ? (
+          {account.remediation && onRemediate ? (
+            <button type="button" className="account__retry" onClick={() => onRemediate(account)}>
+              {account.remediation.choices[0]?.kind === "retry" ? <RefreshIcon size={12} /> : null}
+              {account.remediation.choices[0]?.kind === "retry"
+                ? "Try again"
+                : account.remediation.choices[0]?.kind === "open-settings"
+                  ? account.provider === "openrouter" ? "Connect" : "Manage"
+                  : "Reconnect"}
+            </button>
+          ) : account.status === "error" && onRetry ? (
             <button type="button" className="account__retry" onClick={onRetry}>
               <RefreshIcon size={12} />
               Retry

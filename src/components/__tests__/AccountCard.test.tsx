@@ -128,6 +128,46 @@ describe("AccountCard", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  it("offers a diagnosed reconnect action instead of a generic retry", () => {
+    const onRetry = vi.fn();
+    const onRemediate = vi.fn();
+    const account = makeAccount({
+      source: "cli",
+      isCliActive: false,
+      status: "error",
+      message: "This is not the current Claude Code account.",
+      remediation: {
+        id: "opaque-plan",
+        title: "Reconnect this Claude account?",
+        detail: "Choose how to reconnect.",
+        choices: [
+          {
+            id: "managed-login",
+            kind: "managed-login",
+            label: "Reconnect inside EyeUrAI",
+            detail: null,
+            commandPreview: null,
+            impact: "app-only",
+          },
+        ],
+      },
+    });
+    render(
+      <AccountCard
+        account={account}
+        now={NOW}
+        warnThreshold={75}
+        criticalThreshold={90}
+        onRetry={onRetry}
+        onRemediate={onRemediate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(onRemediate).toHaveBeenCalledWith(account);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("pins the exact account and window selected", () => {
     const onToggleQuotaPin = vi.fn();
     render(
