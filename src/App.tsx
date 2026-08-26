@@ -13,8 +13,13 @@ import { usePreferences } from "./hooks/usePreferences";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useLaunchAtLogin } from "./hooks/useLaunchAtLogin";
-import { fetchLocalUsage, hideWindow, isTauri, setTrayDisplay } from "./lib/ipc";
-import { createDemoLocalUsage } from "./lib/demo";
+import {
+  fetchLocalUsage,
+  hideWindow,
+  isTauri,
+  setTrayDisplay,
+  signalFrontendReady,
+} from "./lib/ipc";
 import {
   displayPercent,
   menuBarQuotaLabel,
@@ -63,6 +68,40 @@ function nativePlatform(): "macos" | "windows" | "other" | "browser" {
   return "other";
 }
 
+export function DesktopInstallRequired() {
+  return (
+    <div className="app" data-platform="browser">
+      <div className="app__frame">
+        <div className="onboarding">
+          <div className="onboarding__hero">
+            <h1 className="onboarding__title">Install the desktop app</h1>
+            <p className="onboarding__subtitle">
+              This browser copy cannot read accounts or credentials on your computer.
+            </p>
+          </div>
+          <div className="onboarding__body">
+            <p className="onboarding__hint">
+              Download the latest EyeUrAI installer from GitHub Releases, then launch it from
+              Applications or the Windows Start menu. Production browser builds never show mock
+              accounts.
+            </p>
+          </div>
+          <footer className="onboarding__foot">
+            <a
+              className="btn btn--primary"
+              href="https://github.com/itsnotmarvin/eyeurai/releases/latest"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Download latest EyeUrAI
+            </a>
+          </footer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const recording =
     import.meta.env.DEV &&
@@ -89,6 +128,7 @@ export function App() {
   const [usageConsentOpen, setUsageConsentOpen] = useState(false);
   const [remediationAccount, setRemediationAccount] = useState<Account | null>(null);
   const [settingsConnectionProvider, setSettingsConnectionProvider] = useState<ProviderId | null>(null);
+  const [settingsConnectionPickerOpen, setSettingsConnectionPickerOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(
     () =>
       import.meta.env.DEV &&
@@ -103,6 +143,12 @@ export function App() {
     windowLabel: string;
     resetsAt: string | null;
   } | null>(null);
+
+  useEffect(() => {
+    void signalFrontendReady().catch(() => {
+      // The main snapshot request owns user-facing native-bridge errors.
+    });
+  }, []);
 
   const monitoredSnapshot = useMemo(() => {
     if (!snapshot) return null;
@@ -266,8 +312,8 @@ export function App() {
     setLocalUsageError(null);
     try {
       const next =
-        mode === "demo"
-          ? createDemoLocalUsage(Date.now(), localUsageDays)
+        import.meta.env.DEV && mode === "demo"
+          ? (await import("./lib/demo")).createDemoLocalUsage(Date.now(), localUsageDays)
           : await fetchLocalUsage(localUsageDays);
       if (requestId !== localUsageRequestId.current) return;
       setLocalUsage(next);
@@ -290,8 +336,21 @@ export function App() {
     if (preferences.localUsageEnabled) void scanLocalUsage();
   }, [preferences.localUsageEnabled, refresh, scanLocalUsage]);
 
-  const openSettings = useCallback(() => setView("settings"), []);
-  const closeSettings = useCallback(() => setView("dashboard"), []);
+  const openSettings = useCallback(() => {
+    setSettingsConnectionProvider(null);
+    setSettingsConnectionPickerOpen(false);
+    setView("settings");
+  }, []);
+  const openAccountPicker = useCallback(() => {
+    setSettingsConnectionProvider(null);
+    setSettingsConnectionPickerOpen(true);
+    setView("settings");
+  }, []);
+  const closeSettings = useCallback(() => {
+    setSettingsConnectionProvider(null);
+    setSettingsConnectionPickerOpen(false);
+    setView("dashboard");
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
@@ -323,6 +382,8 @@ export function App() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [view]);
+
+  if (mode === "browser") return <DesktopInstallRequired />;
 
   if (!preferences.onboardingCompleted) {
     return (
@@ -360,6 +421,7 @@ export function App() {
         onRefreshAccounts={refreshAll}
         onRequestLocalUsage={() => setUsageConsentOpen(true)}
         initialConnectProvider={settingsConnectionProvider}
+        initialConnectOpen={settingsConnectionPickerOpen}
         onRerunSetup={() => {
           update({ onboardingCompleted: false });
           setView("dashboard");
@@ -391,11 +453,11 @@ export function App() {
     body = (
       <EmptyState
         title="No connected accounts"
-        body={`Sign in to ${preferences.enabledProviders
+        body={`Connect ${preferences.enabledProviders
           .map((provider) => PROVIDER_META[provider].name)
-          .join(", ")} with its CLI or add an API key, then refresh.`}
-        actionLabel="Refresh"
-        onAction={refreshAll}
+          .join(", ")} in EyeUrAI, or use an existing provider CLI sign-in.`}
+        actionLabel="Add account"
+        onAction={openAccountPicker}
       />
     );
   } else {
@@ -508,6 +570,7 @@ export function App() {
             onClose={() => setRemediationAccount(null)}
             onOpenSettings={(provider) => {
               setSettingsConnectionProvider(provider);
+              setSettingsConnectionPickerOpen(false);
               setRemediationAccount(null);
               setView("settings");
             }}

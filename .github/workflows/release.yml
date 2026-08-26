@@ -83,6 +83,17 @@ jobs:
           $version = node -p "require('./package.json').version"
           ./scripts/windows-smoke.ps1 -Installer "src-tauri/target/release/bundle/nsis/EyeUrAI_${version}_x64-setup.exe"
 
+      - name: Smoke-test macOS app bridge
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          app_path=$(find src-tauri/target -type d -path '*/release/bundle/macos/EyeUrAI.app' -print -quit)
+          if [[ -z "$app_path" ]]; then
+            echo "EyeUrAI.app was not found in the Tauri bundle output" >&2
+            exit 1
+          fi
+          bash ./scripts/macos-smoke.sh "$app_path"
+
   publish-release:
     name: Publish verified release
     needs: publish

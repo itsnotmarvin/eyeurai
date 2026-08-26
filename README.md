@@ -10,6 +10,8 @@ EyeUrAI is an open-source, local-first menu-bar and system-tray app for monitori
 
 Download EyeUrAI only from the [latest GitHub Release](https://github.com/itsnotmarvin/eyeurai/releases/latest). Files ending in `.sig` or `.app.tar.gz`, plus `latest.json`, are used by the automatic updater; you do not need them for a normal installation.
 
+Do not use GitHub's **Source code** ZIP as the desktop app. A production browser build cannot read local accounts and shows an installation screen; mock accounts are available only in local development.
+
 ### Download and install on macOS
 
 EyeUrAI requires macOS 11 or newer.
@@ -175,7 +177,7 @@ npm install
 npm run dev
 ```
 
-The ordinary Vite view uses deterministic demo data so interface work never requires real credentials. It is intended for interface development, not normal use. Demo data is never substituted by the packaged app's live commands.
+The ordinary Vite development view uses deterministic demo data so interface work never requires real credentials. Production browser builds show an installation screen instead of mock accounts, and demo data is never substituted by the packaged app's live commands.
 
 ### Run the desktop app
 

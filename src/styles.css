@@ -1664,6 +1664,7 @@ input {
   font-size: 12px;
   font-weight: 580;
   letter-spacing: -0.05px;
+  text-decoration: none;
   cursor: default;
   transition:
     background var(--dur) var(--ease),

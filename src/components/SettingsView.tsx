@@ -37,8 +37,8 @@ export interface SettingsViewProps {
   now?: number;
   launchAtLogin?: LaunchAtLoginState;
   onChange: (next: Preferences) => void;
-  /** "demo" when running outside Tauri with sample data. */
-  mode: "live" | "demo";
+  /** "demo" is development-only; "browser" is an install-required production view. */
+  mode: "live" | "demo" | "browser";
   onRerunSetup: () => void;
   accounts: Account[];
   onDisconnectAccount: (account: Account) => void;
@@ -49,6 +49,7 @@ export interface SettingsViewProps {
   requestPermission?: () => Promise<boolean>;
   /** Opens the connection sheet directly when remediation routes here. */
   initialConnectProvider?: ProviderId | null;
+  initialConnectOpen?: boolean;
 }
 
 const LOGIN_FLOW_COPY: Record<
@@ -160,6 +161,7 @@ export function SettingsView({
   appVersion = "unknown",
   requestPermission,
   initialConnectProvider,
+  initialConnectOpen = false,
 }: SettingsViewProps) {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -194,6 +196,16 @@ export function SettingsView({
     // The profile flows are stable for the mounted settings view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialConnectProvider]);
+
+  useEffect(() => {
+    if (!initialConnectOpen || initialConnectProvider) return;
+    setConnectProvider(null);
+    codexFlow.reset();
+    claudeFlow.reset();
+    setConnectOpen(true);
+    // The profile flows are stable for the mounted settings view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConnectOpen, initialConnectProvider]);
   const askForPermission = requestPermission ?? ensureNotificationPermission;
   const connectedAccounts = accounts.filter((account) => !/-status-\d+$/.test(account.id));
   const pinnedAccount = preferences.pinnedQuota

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Snapshot } from "../types/quota";
-import { createDemoSnapshot, refreshDemoSnapshot } from "../lib/demo";
 import {
   fetchSnapshot,
   isTauri,
@@ -11,7 +10,7 @@ import {
 } from "../lib/ipc";
 
 export type SnapshotPhase = "loading" | "ready" | "error";
-export type SnapshotMode = "live" | "demo";
+export type SnapshotMode = "live" | "demo" | "browser";
 
 export interface SnapshotController {
   snapshot: Snapshot | null;
@@ -38,13 +37,21 @@ function describeError(error: unknown): string {
   return "Could not read quota data.";
 }
 
+/** Demo data is a development tool, never a production fallback. */
+export function resolveSnapshotMode(native: boolean, development: boolean): SnapshotMode {
+  if (native) return "live";
+  return development ? "demo" : "browser";
+}
+
 export function useSnapshot(
   excludedAccountIds: readonly string[] = [],
   autoRefreshIntervalMs: number = AUTO_REFRESH_INTERVAL_MS,
 ): SnapshotController {
   const live = isTauri();
+  const mode = resolveSnapshotMode(live, import.meta.env.DEV);
+  const demo = mode === "demo";
   const recording =
-    !live &&
+    demo &&
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).has("recording");
   const exclusionsKey = [...excludedAccountIds].sort().join("\u0000");
@@ -91,6 +98,15 @@ export function useSnapshot(
 
       try {
         if (!live) {
+          if (!import.meta.env.DEV || !demo) {
+            if (mounted.current) {
+              setSnapshot(null);
+              setError("Install the EyeUrAI desktop app to read accounts on this computer.");
+              setPhase("error");
+            }
+            return;
+          }
+          const { createDemoSnapshot, refreshDemoSnapshot } = await import("../lib/demo");
           const previous = snapshotRef.current;
           // Background polls must not undo demo drift; only manual refreshes move.
           if (!options.manual) {
@@ -127,18 +143,19 @@ export function useSnapshot(
         if (mounted.current && queued) void loadRef.current(queued);
       }
     },
-    [apply, exclusionsKey, live, recording],
+    [apply, demo, exclusionsKey, live, recording],
   );
   loadRef.current = load;
 
   useEffect(() => {
     void load({ manual: false, liveRefresh: false });
+    if (mode === "browser") return;
     const interval = setInterval(
       () => void load({ manual: false, liveRefresh: true }),
       autoRefreshIntervalMs,
     );
     return () => clearInterval(interval);
-  }, [autoRefreshIntervalMs, load]);
+  }, [autoRefreshIntervalMs, load, mode]);
 
   useEffect(() => {
     if (!live) return;
@@ -179,7 +196,7 @@ export function useSnapshot(
   return {
     snapshot,
     phase,
-    mode: live ? "live" : "demo",
+    mode,
     refreshing: refreshing || snapshot?.refreshing === true,
     error,
     refresh,

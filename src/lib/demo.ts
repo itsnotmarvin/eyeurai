@@ -41,7 +41,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "claude-personal",
     provider: "claude",
-    label: "marbin@hey.com",
+    label: "demo.personal@example.com",
     plan: "Max 20×",
     source: "oauth",
     isCliActive: true,
@@ -81,7 +81,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "claude-team",
     provider: "claude",
-    label: "eng@nimbus.dev",
+    label: "demo.team@example.com",
     plan: "Team · seat 4",
     source: "cli",
     isCliActive: false,
@@ -113,7 +113,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "openai-pro",
     provider: "openai",
-    label: "marbin@hey.com",
+    label: "demo.openai@example.com",
     plan: "ChatGPT Pro",
     source: "oauth",
     isCliActive: true,
@@ -144,7 +144,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "openai-api",
     provider: "openai",
-    label: "nimbus-prod (org)",
+    label: "demo-api (org)",
     plan: "API · pay as you go",
     source: "api-key",
     status: "error",
@@ -155,7 +155,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "openrouter-main",
     provider: "openrouter",
-    label: "nimbus-prod",
+    label: "demo-router",
     plan: "Credits",
     source: "api-key",
     status: "fresh",
@@ -185,7 +185,7 @@ const ACCOUNT_SEEDS: AccountSeed[] = [
   {
     id: "gemini-pro",
     provider: "gemini",
-    label: "marbin@gmail.com",
+    label: "demo.gemini@example.com",
     plan: "Google AI Pro",
     source: "oauth",
     status: "fresh",

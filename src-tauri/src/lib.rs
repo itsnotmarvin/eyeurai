@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, Monitor, PhysicalPosition, Runtime};
@@ -14,6 +16,34 @@ mod providers;
 mod remediation;
 
 const MAX_TRAY_LABEL_CHARS: usize = 8;
+const STARTUP_SMOKE_ARGUMENT: &str = "--startup-smoke-marker=";
+const STARTUP_SMOKE_CONTENT: &str = "native-bridge-ready\n";
+
+struct StartupSmokeState {
+    marker_path: Option<PathBuf>,
+}
+
+fn startup_smoke_marker_from(arguments: impl IntoIterator<Item = String>) -> Option<PathBuf> {
+    arguments.into_iter().find_map(|argument| {
+        argument
+            .strip_prefix(STARTUP_SMOKE_ARGUMENT)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+#[tauri::command]
+fn frontend_ready(state: tauri::State<'_, StartupSmokeState>) -> Result<&'static str, String> {
+    if let Some(marker_path) = &state.marker_path {
+        std::fs::write(marker_path, STARTUP_SMOKE_CONTENT).map_err(|error| {
+            format!(
+                "could not write the startup smoke marker at {}: {error}",
+                marker_path.display()
+            )
+        })?;
+    }
+    Ok("native-bridge-ready")
+}
 
 fn sanitize_tray_label(raw_label: &str) -> Option<String> {
     let mut label = String::with_capacity(raw_label.len().min(MAX_TRAY_LABEL_CHARS));
@@ -320,6 +350,7 @@ fn set_tray_display(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let launched_hidden = std::env::args_os().any(|argument| argument == "--hidden");
+    let startup_smoke_marker = startup_smoke_marker_from(std::env::args());
     let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
 
     #[cfg(desktop)]
@@ -340,6 +371,7 @@ pub fn run() {
             commands::execute_remediation,
             local_usage::scan_local_usage,
             set_tray_display,
+            frontend_ready,
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
@@ -347,6 +379,9 @@ pub fn run() {
 
             let app_data_dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
             app.manage(commands::AppState::new(app_data_dir).map_err(std::io::Error::other)?);
+            app.manage(StartupSmokeState {
+                marker_path: startup_smoke_marker,
+            });
 
             let handle = app.handle().clone();
             let open_item = MenuItem::with_id(app, "open", "Open EyeUrAI", true, None::<&str>)?;
@@ -421,7 +456,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_tray_title, sanitize_tray_label};
+    use std::path::PathBuf;
+
+    use super::{format_tray_title, sanitize_tray_label, startup_smoke_marker_from};
+
+    #[test]
+    fn startup_smoke_marker_requires_a_non_empty_explicit_argument() {
+        assert_eq!(
+            startup_smoke_marker_from([
+                "eyeurai".to_string(),
+                "--startup-smoke-marker=/tmp/ready.txt".to_string(),
+            ]),
+            Some(PathBuf::from("/tmp/ready.txt"))
+        );
+        assert_eq!(
+            startup_smoke_marker_from([
+                "eyeurai".to_string(),
+                "--startup-smoke-marker=".to_string(),
+            ]),
+            None
+        );
+    }
 
     #[test]
     fn tray_title_uses_the_selected_window_label() {

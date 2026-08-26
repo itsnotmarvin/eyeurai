@@ -34,7 +34,7 @@ describe("App quota pinning", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Codex · local (5h) quota for OpenAI · marbin@hey.com to menu bar",
+        name: "Pin Codex · local (5h) quota for OpenAI · demo.openai@example.com to menu bar",
       }),
     );
     await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith("5h", 50));
@@ -42,7 +42,7 @@ describe("App quota pinning", () => {
     traySpy.mockClear();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     );
 

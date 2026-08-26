@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { App } from "../App";
+import { App, DesktopInstallRequired } from "../App";
 import * as demo from "../lib/demo";
 import * as ipc from "../lib/ipc";
 import {
@@ -27,6 +27,17 @@ afterEach(() => {
 });
 
 describe("App", () => {
+  it("directs production browser users to the latest desktop release without mock accounts", () => {
+    render(<DesktopInstallRequired />);
+
+    expect(screen.getByRole("heading", { name: "Install the desktop app" })).toBeInTheDocument();
+    expect(screen.queryByText("demo.personal@example.com")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download latest EyeUrAI" })).toHaveAttribute(
+      "href",
+      "https://github.com/itsnotmarvin/eyeurai/releases/latest",
+    );
+  });
+
   it("runs onboarding on first launch and remembers the outcome", async () => {
     render(<App />);
 
@@ -54,7 +65,7 @@ describe("App", () => {
     expect(screen.getAllByRole("progressbar").length).toBeGreaterThan(6);
 
     const retainedAccount = screen.getByRole("article", {
-      name: "Claude · eng@nimbus.dev",
+      name: "Claude · demo.team@example.com",
     });
     expect(within(retainedAccount).getByText("Last known")).toBeInTheDocument();
     expect(within(retainedAccount).queryByText("Live")).not.toBeInTheDocument();
@@ -109,24 +120,24 @@ describe("App", () => {
     const settings = await screen.findByRole("region", { name: "Settings" });
     fireEvent.click(
       within(settings).getByRole("button", {
-        name: "Disconnect Claude account marbin@hey.com from EyeUrAI",
+        name: "Disconnect Claude account demo.personal@example.com from EyeUrAI",
       }),
     );
 
     await waitFor(() =>
       expect(loadPreferences().disconnectedAccounts).toEqual([
-        { id: "claude-personal", provider: "claude", label: "marbin@hey.com" },
+        { id: "claude-personal", provider: "claude", label: "demo.personal@example.com" },
       ]),
     );
     expect(
       within(settings).getByRole("button", {
-        name: "Reconnect Claude account marbin@hey.com to EyeUrAI",
+        name: "Reconnect Claude account demo.personal@example.com to EyeUrAI",
       }),
     ).toBeInTheDocument();
 
     fireEvent.click(
       within(settings).getByRole("button", {
-        name: "Reconnect Claude account marbin@hey.com to EyeUrAI",
+        name: "Reconnect Claude account demo.personal@example.com to EyeUrAI",
       }),
     );
     await waitFor(() => expect(loadPreferences().disconnectedAccounts).toEqual([]));
@@ -201,6 +212,25 @@ describe("App", () => {
       within(dialog).getByText(/terminal login is picked up automatically/i),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Add Claude account" })).toBeInTheDocument();
+  });
+
+  it("opens the account picker directly when a native install has no accounts", async () => {
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    vi.spyOn(ipc, "fetchSnapshot").mockResolvedValue({
+      ...demo.createDemoSnapshot(),
+      accounts: [],
+    });
+    vi.spyOn(ipc, "subscribeToSnapshots").mockResolvedValue(() => {});
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+    seedPreferences();
+
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "No connected accounts" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+
+    expect(await screen.findByRole("dialog", { name: "Add account" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Claude" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "OpenAI" })).toBeInTheDocument();
   });
 
   it("keeps global shortcuts behind a modal and dismisses only the modal with Escape", async () => {
@@ -477,7 +507,7 @@ describe("App", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     );
     await waitFor(() =>
@@ -488,13 +518,13 @@ describe("App", () => {
     );
     expect(
       screen.getByRole("button", {
-        name: "Unpin Session (5h) quota for Claude · marbin@hey.com from menu bar",
+        name: "Unpin Session (5h) quota for Claude · demo.personal@example.com from menu bar",
       }),
     ).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · eng@nimbus.dev to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.team@example.com to menu bar",
       }),
     );
     await waitFor(() =>
@@ -505,13 +535,13 @@ describe("App", () => {
     );
     expect(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     ).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Weekly · all models quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Weekly · all models quota for Claude · demo.personal@example.com to menu bar",
       }),
     );
     await waitFor(() =>
@@ -522,13 +552,13 @@ describe("App", () => {
     );
     expect(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     ).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Unpin Weekly · all models quota for Claude · marbin@hey.com from menu bar",
+        name: "Unpin Weekly · all models quota for Claude · demo.personal@example.com from menu bar",
       }),
     );
     await waitFor(() => expect(loadPreferences().pinnedQuota).toBeNull());
@@ -548,7 +578,7 @@ describe("App", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Unpin Session (5h) quota for Claude · marbin@hey.com from menu bar",
+        name: "Unpin Session (5h) quota for Claude · demo.personal@example.com from menu bar",
       }),
     );
     await waitFor(() => expect(traySpy).toHaveBeenLastCalledWith(null, null));
@@ -564,7 +594,7 @@ describe("App", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     );
 
@@ -585,7 +615,7 @@ describe("App", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Pin reset timer for Session (5h) quota for Claude · marbin@hey.com to menu bar",
+        name: "Pin reset timer for Session (5h) quota for Claude · demo.personal@example.com to menu bar",
       }),
     );
 
@@ -633,7 +663,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(
         screen.queryByRole("button", {
-          name: "Unpin reset timer for Session (5h) quota for Claude · marbin@hey.com from menu bar",
+          name: "Unpin reset timer for Session (5h) quota for Claude · demo.personal@example.com from menu bar",
         }),
       ).not.toBeInTheDocument(),
     );

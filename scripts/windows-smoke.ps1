@@ -25,11 +25,30 @@ if (-not $executable) {
   throw "EyeUrAI executable was not installed under $installDir"
 }
 
-$app = Start-Process -FilePath $executable.FullName -PassThru
-Start-Sleep -Seconds 10
-if ($app.HasExited) {
-  throw "EyeUrAI exited during its Windows startup smoke test with code $($app.ExitCode)"
+$markerPath = Join-Path $installDir "native-bridge-ready.txt"
+$app = Start-Process `
+  -FilePath $executable.FullName `
+  -ArgumentList "--startup-smoke-marker=$markerPath" `
+  -PassThru
+
+$deadline = (Get-Date).AddSeconds(20)
+while (-not (Test-Path $markerPath) -and (Get-Date) -lt $deadline) {
+  if ($app.HasExited) {
+    throw "EyeUrAI exited before its native bridge became ready with code $($app.ExitCode)"
+  }
+  Start-Sleep -Milliseconds 250
+}
+
+if (-not (Test-Path $markerPath)) {
+  Stop-Process -Id $app.Id -Force
+  throw "EyeUrAI started, but its packaged frontend never reached the native command bridge"
+}
+
+$marker = (Get-Content -Raw $markerPath).Trim()
+if ($marker -ne "native-bridge-ready") {
+  Stop-Process -Id $app.Id -Force
+  throw "EyeUrAI wrote an invalid native bridge smoke marker: $marker"
 }
 
 Stop-Process -Id $app.Id -Force
-Write-Host "EyeUrAI installed and remained running for the Windows startup smoke test."
+Write-Host "EyeUrAI installed and its packaged frontend reached the native bridge."

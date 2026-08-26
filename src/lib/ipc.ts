@@ -13,10 +13,11 @@ import { normalizeProvider } from "./normalize";
 /**
  * Thin Tauri IPC client.
  *
- * Everything here degrades gracefully: when the app is served by plain Vite
- * (no Tauri runtime) every call resolves to `null` and callers fall back to the
- * deterministic demo snapshot. Command names are probed from a small candidate
- * list so the frontend keeps working if the Rust side picks a different verb.
+ * Everything here degrades gracefully: when the app is served without Tauri,
+ * every call resolves to `null`. Development callers may choose deterministic
+ * demo data; production callers must direct the user to the desktop installer.
+ * Command names are probed from a small candidate list so the frontend keeps
+ * working if the Rust side picks a different verb.
  */
 
 const SNAPSHOT_COMMANDS = ["get_snapshot", "snapshot", "quota_snapshot"] as const;
@@ -30,6 +31,7 @@ const CODEX_LOGIN_EVENT = "eyeurai://codex-profile-login";
 const START_CLAUDE_LOGIN_COMMANDS = ["start_claude_account_login"] as const;
 const CLAUDE_LOGIN_EVENT = "eyeurai://claude-profile-login";
 const EXECUTE_REMEDIATION_COMMANDS = ["execute_remediation"] as const;
+const FRONTEND_READY_COMMANDS = ["frontend_ready"] as const;
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
@@ -132,6 +134,12 @@ export async function requestRefresh(
   });
   if (raw === null || raw === undefined) return null;
   return normalizeSnapshot(raw);
+}
+
+/** Confirms that the packaged React app can reach the native command bridge. */
+export async function signalFrontendReady(): Promise<boolean> {
+  const result = await invokeAny<string>("frontend-ready", FRONTEND_READY_COMMANDS);
+  return result === "native-bridge-ready";
 }
 
 /** Starts an official Codex browser login in a new isolated CODEX_HOME. */

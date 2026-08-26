@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDemoSnapshot } from "../lib/demo";
 import * as ipc from "../lib/ipc";
-import { useSnapshot } from "./useSnapshot";
+import { resolveSnapshotMode, useSnapshot } from "./useSnapshot";
 
 afterEach(() => {
   cleanup();
@@ -13,6 +13,12 @@ afterEach(() => {
 });
 
 describe("useSnapshot", () => {
+  it("never selects demo data for a production browser build", () => {
+    expect(resolveSnapshotMode(false, false)).toBe("browser");
+    expect(resolveSnapshotMode(false, true)).toBe("demo");
+    expect(resolveSnapshotMode(true, false)).toBe("live");
+  });
+
   it("queues one manual refresh behind an in-flight load", async () => {
     let resolveInitial!: (snapshot: ReturnType<typeof createDemoSnapshot>) => void;
     const initialResult = new Promise<ReturnType<typeof createDemoSnapshot>>((resolve) => {
