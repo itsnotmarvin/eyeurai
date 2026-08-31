@@ -46,12 +46,27 @@ impl Drop for ProfileAccessGuard {
     }
 }
 
+fn is_lock_contended(error: &std::io::Error) -> bool {
+    // Unix lock contention normally maps to WouldBlock. Windows returns
+    // ERROR_LOCK_VIOLATION, which Rust currently classifies as Uncategorized,
+    // so compare fs2's canonical raw error without broadening every
+    // Uncategorized I/O failure into a retryable lock conflict.
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || match (
+            error.raw_os_error(),
+            fs2::lock_contended_error().raw_os_error(),
+        ) {
+            (Some(actual), Some(expected)) => actual == expected,
+            _ => false,
+        }
+}
+
 async fn lock_exclusive_with_timeout(lock_file: File, timeout: Duration) -> std::io::Result<File> {
     let deadline = Instant::now() + timeout;
     loop {
         match fs2::FileExt::try_lock_exclusive(&lock_file) {
             Ok(()) => return Ok(lock_file),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error) if is_lock_contended(&error) => {
                 if Instant::now() >= deadline {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
