@@ -200,6 +200,48 @@ function New-StartupMarkerLease {
   return $markerPath
 }
 
+function Assert-WindowsGuiSubsystem {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ExecutablePath
+  )
+
+  $stream = [System.IO.File]::OpenRead($ExecutablePath)
+  $reader = [System.IO.BinaryReader]::new($stream)
+  try {
+    if ($stream.Length -lt 64) {
+      throw "EyeUrAI's executable is too small to contain a valid PE header."
+    }
+
+    $stream.Position = 0x3c
+    $peOffset = $reader.ReadInt32()
+    $subsystemEnd = [int64]$peOffset + 24 + 70
+    if ($peOffset -lt 0 -or $subsystemEnd -gt $stream.Length) {
+      throw "EyeUrAI's executable contains an invalid PE header offset."
+    }
+
+    $stream.Position = $peOffset
+    if ($reader.ReadUInt32() -ne 0x00004550) {
+      throw "EyeUrAI's executable is missing the PE signature."
+    }
+
+    $stream.Position = $peOffset + 24
+    $optionalHeaderMagic = $reader.ReadUInt16()
+    if ($optionalHeaderMagic -ne 0x010b -and $optionalHeaderMagic -ne 0x020b) {
+      throw "EyeUrAI's executable has an unsupported PE optional-header format."
+    }
+
+    # The Subsystem field is 68 bytes into both PE32 and PE32+ optional headers.
+    $stream.Position = $peOffset + 24 + 68
+    $subsystem = $reader.ReadUInt16()
+    if ($subsystem -ne 2) {
+      throw "EyeUrAI's packaged executable uses PE subsystem $subsystem; expected Windows GUI (2)."
+    }
+  } finally {
+    $reader.Dispose()
+  }
+}
+
 function Read-StartupMarker {
   param(
     [Parameter(Mandatory = $true)]
@@ -464,6 +506,8 @@ try {
     throw "EyeUrAI executable was not installed under $installDir"
   }
   $executablePath = $executable.FullName
+  Assert-WindowsGuiSubsystem -ExecutablePath $executablePath
+  Write-Host "EyeUrAI's packaged executable uses the Windows GUI subsystem."
 
   # Preserve the original packaged-app bridge smoke test.
   $freshMarkerPath = New-StartupMarkerLease -Name "fresh"
