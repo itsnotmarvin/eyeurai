@@ -50,6 +50,7 @@ enum StartupSmokePhase {
     Ready,
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StartupSmokeMarker {
     phase: StartupSmokePhase,
@@ -78,6 +79,7 @@ fn startup_smoke_content(phase: StartupSmokePhase, process_id: u32) -> String {
     format!("{prefix}{process_id}\n")
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn parse_startup_smoke_marker(contents: &str) -> Option<StartupSmokeMarker> {
     let contents = contents.trim();
     let (phase, process_id) = contents
@@ -95,6 +97,7 @@ fn parse_startup_smoke_marker(contents: &str) -> Option<StartupSmokeMarker> {
     Some(StartupSmokeMarker { phase, process_id })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn read_startup_smoke_marker(marker_path: &Path) -> Option<StartupSmokeMarker> {
     std::fs::read_to_string(marker_path)
         .ok()
