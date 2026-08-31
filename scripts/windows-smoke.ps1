@@ -40,14 +40,113 @@ if (-not ("EyeUrAI.WindowsSmoke.NativeMethods" -as [type])) {
   Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace EyeUrAI.WindowsSmoke
 {
     public static class NativeMethods
     {
+        private const string EyeUrAITitle = "EyeUrAI";
+        private const string EyeUrAIWindowClass = "Tauri Window";
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassNameW(IntPtr hWnd, StringBuilder className, int maxCount);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowTextLengthW(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+        private static extern int GetWindowLong(IntPtr hWnd, int index);
+
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool IsWindowVisible(IntPtr hWnd);
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        private static IntPtr FindEyeUrAIMainWindow(int processId)
+        {
+            // Tao owns a zero-sized, technically visible event-target HWND.
+            // Match the real configured Tauri window instead of trusting
+            // Process.MainWindowHandle, which can select Tao's helper.
+            var found = IntPtr.Zero;
+            EnumWindows((hWnd, _) =>
+            {
+                GetWindowThreadProcessId(hWnd, out var ownerProcessId);
+                if (ownerProcessId != (uint)processId)
+                {
+                    return true;
+                }
+
+                var className = new StringBuilder(256);
+                if (GetClassNameW(hWnd, className, className.Capacity) != EyeUrAIWindowClass.Length ||
+                    !string.Equals(className.ToString(), EyeUrAIWindowClass, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                var titleLength = GetWindowTextLengthW(hWnd);
+                if (titleLength != EyeUrAITitle.Length)
+                {
+                    return true;
+                }
+                var title = new StringBuilder(titleLength + 1);
+                if (GetWindowTextW(hWnd, title, title.Capacity) != titleLength ||
+                    !string.Equals(title.ToString(), EyeUrAITitle, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                if (!GetWindowRect(hWnd, out var bounds) ||
+                    bounds.Right <= bounds.Left ||
+                    bounds.Bottom <= bounds.Top ||
+                    (GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0)
+                {
+                    return true;
+                }
+
+                found = hWnd;
+                return false;
+            }, IntPtr.Zero);
+            return found;
+        }
+
+        public static bool HasEyeUrAIMainWindow(int processId)
+        {
+            return FindEyeUrAIMainWindow(processId) != IntPtr.Zero;
+        }
+
+        public static bool IsEyeUrAIMainWindowVisible(int processId)
+        {
+            var window = FindEyeUrAIMainWindow(processId);
+            return window != IntPtr.Zero && IsWindowVisible(window);
+        }
     }
 }
 "@
@@ -203,17 +302,20 @@ function Test-MainWindowVisible {
     [int64]$ProcessId
   )
 
-  try {
-    $process = Get-Process -Id $ProcessId -ErrorAction Stop
-    $process.Refresh()
-    $windowHandle = $process.MainWindowHandle
-    if ($windowHandle -eq [IntPtr]::Zero) {
-      return $false
-    }
-    return [EyeUrAI.WindowsSmoke.NativeMethods]::IsWindowVisible($windowHandle)
-  } catch {
-    return $false
-  }
+  return [EyeUrAI.WindowsSmoke.NativeMethods]::IsEyeUrAIMainWindowVisible(
+    [int]$ProcessId
+  )
+}
+
+function Test-MainWindowExists {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int64]$ProcessId
+  )
+
+  return [EyeUrAI.WindowsSmoke.NativeMethods]::HasEyeUrAIMainWindow(
+    [int]$ProcessId
+  )
 }
 
 function Wait-MainWindowVisible {
@@ -248,6 +350,9 @@ function Assert-MainWindowRemainsHidden {
   while ((Get-Date) -lt $deadline) {
     if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
       throw "Hidden EyeUrAI process $ProcessId exited during the visibility check."
+    }
+    if (-not (Test-MainWindowExists -ProcessId $ProcessId)) {
+      throw "EyeUrAI process $ProcessId did not create its expected main window."
     }
     if (Test-MainWindowVisible -ProcessId $ProcessId) {
       throw "EyeUrAI process $ProcessId showed its main window despite a plain --hidden launch."
