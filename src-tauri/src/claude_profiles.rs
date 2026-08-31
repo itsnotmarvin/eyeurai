@@ -13,13 +13,10 @@
 //! `user:profile` scope: enough to read usage and identity, deliberately not
 //! enough to run inference with the stored token.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
-
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -622,25 +619,31 @@ fn read_grant(profile_home: &Path) -> Result<StoredGrant, ProviderError> {
     Ok(grant)
 }
 
-/// Write the grant atomically: owner-only temporary file, fsync, rename.
+/// Write the grant atomically: owner-only temporary file, fsync, replace.
 /// Refresh rotation means a torn write here would lose the account, so the
-/// rename only happens after the bytes are durable.
+/// replacement only happens after the bytes are durable. `NamedTempFile` uses
+/// replace-existing semantics on Windows, where `std::fs::rename` cannot
+/// overwrite the existing grant.
 fn write_grant(profile_home: &Path, grant: &StoredGrant) -> Result<(), ProviderError> {
     let bytes = serde_json::to_vec_pretty(grant)
         .map_err(|_| ProviderError::internal("could not encode the Claude account credential"))?;
-    let temp_path = profile_home.join(format!("{AUTH_FILE}.tmp-{}", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
     let result = (|| -> std::io::Result<()> {
-        let mut file = options.open(&temp_path)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(&temp_path, profile_home.join(AUTH_FILE))
+        let mut temporary = tempfile::Builder::new()
+            .prefix(&format!(".{AUTH_FILE}.tmp-"))
+            .tempfile_in(profile_home)?;
+        temporary.write_all(&bytes)?;
+        temporary.as_file().sync_all()?;
+        let persisted = temporary
+            .persist(profile_home.join(AUTH_FILE))
+            .map_err(|error| error.error)?;
+        persisted.sync_all()?;
+
+        #[cfg(unix)]
+        fs::File::open(profile_home)?.sync_all()?;
+
+        Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
         return Err(ProviderError::internal(
             "could not save the Claude account credential",
         ));
@@ -797,6 +800,16 @@ mod tests {
         assert_eq!(read.access_token, "FAKE-access");
         assert_eq!(read.refresh_token, "FAKE-refresh");
         assert_eq!(read.email.as_deref(), Some("dev@example.com"));
+
+        let rotated = StoredGrant {
+            access_token: "FAKE-rotated-access".to_string(),
+            refresh_token: "FAKE-rotated-refresh".to_string(),
+            ..grant
+        };
+        write_grant(&profile, &rotated).expect("an existing grant is atomically replaced");
+        let read = read_grant(&profile).unwrap();
+        assert_eq!(read.access_token, "FAKE-rotated-access");
+        assert_eq!(read.refresh_token, "FAKE-rotated-refresh");
 
         fs::write(
             profile.join(AUTH_FILE),

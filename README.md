@@ -103,6 +103,8 @@ Release builds check for signed updates when EyeUrAI starts, when its window reg
 
 Select that button and choose **Update & restart**. EyeUrAI downloads and verifies the release, closes, installs it, and reopens automatically. Update checks never run in the browser preview or `desktop:dev` development build.
 
+For updates initiated by a build containing the new restart protocol, macOS asks LaunchServices to open the updated application as a fresh visible instance, while Linux starts the replacement executable with a clean argument list. Both wait for the replacement to reach its native bridge before closing the old process; if it never becomes ready, the current window stays open and reports the relaunch error instead of disappearing silently. The already-installed v1.3.1 process still owns its first macOS/Linux relaunch, so the v1.3.1 to v1.4.0 transition can retain its legacy behavior. On Windows, the new NSIS installer itself writes a versioned one-use launch marker, which also covers the v1.3.1 to v1.4.0 transition: an update started from the hidden login item reopens visibly without changing normal background launches.
+
 ## What it shows
 
 - Claude five-hour, weekly, and model-specific plan windows when available

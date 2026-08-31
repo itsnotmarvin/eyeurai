@@ -7,7 +7,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-app_path=$1
+app_path=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 executable="$app_path/Contents/MacOS/eyeurai"
 if [[ ! -x "$executable" ]]; then
   echo "EyeUrAI executable was not found at $executable" >&2
@@ -16,9 +16,17 @@ fi
 
 smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/eyeurai-smoke.XXXXXX")
 marker_path="$smoke_dir/native-bridge-ready.txt"
+marker_argument="--startup-smoke-marker=$marker_path"
 app_pid=""
+: > "$marker_path"
 
 cleanup() {
+  if [[ -z "$app_pid" && -s "$marker_path" ]]; then
+    marker=$(tr -d '\r\n' < "$marker_path")
+    if [[ "$marker" =~ ^native-bridge-(started|ready):([1-9][0-9]*)$ ]]; then
+      app_pid=${BASH_REMATCH[2]}
+    fi
+  fi
   if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
@@ -27,20 +35,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$executable" "--startup-smoke-marker=$marker_path" &
-app_pid=$!
+/usr/bin/open -n "$app_path" --args "$marker_argument"
 
-for _ in {1..80}; do
-  if [[ -f "$marker_path" ]]; then
+for _ in {1..120}; do
+  if [[ -s "$marker_path" ]]; then
     marker=$(tr -d '\r\n' < "$marker_path")
-    if [[ "$marker" != "native-bridge-ready" ]]; then
+    if [[ ! "$marker" =~ ^native-bridge-(started|ready):([1-9][0-9]*)$ ]]; then
       echo "EyeUrAI wrote an invalid native bridge smoke marker: $marker" >&2
       exit 1
     fi
-    echo "EyeUrAI packaged frontend reached the native bridge."
-    exit 0
+    marker_state=${BASH_REMATCH[1]}
+    marker_pid=${BASH_REMATCH[2]}
+    if [[ -n "$app_pid" && "$app_pid" != "$marker_pid" ]]; then
+      echo "EyeUrAI changed native bridge process IDs during startup." >&2
+      exit 1
+    fi
+    app_pid=$marker_pid
+    if [[ "$marker_state" == "ready" ]]; then
+      echo "EyeUrAI packaged frontend reached the native bridge."
+      exit 0
+    fi
   fi
-  if ! kill -0 "$app_pid" 2>/dev/null; then
+  if [[ -n "$app_pid" ]] && ! kill -0 "$app_pid" 2>/dev/null; then
     wait "$app_pid" || true
     echo "EyeUrAI exited before its native bridge became ready." >&2
     exit 1

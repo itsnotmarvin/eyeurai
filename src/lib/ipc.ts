@@ -32,6 +32,9 @@ const START_CLAUDE_LOGIN_COMMANDS = ["start_claude_account_login"] as const;
 const CLAUDE_LOGIN_EVENT = "eyeurai://claude-profile-login";
 const EXECUTE_REMEDIATION_COMMANDS = ["execute_remediation"] as const;
 const FRONTEND_READY_COMMANDS = ["frontend_ready"] as const;
+const PREPARE_UPDATE_RELAUNCH_COMMANDS = ["prepare_update_relaunch"] as const;
+const CANCEL_UPDATE_RELAUNCH_COMMANDS = ["cancel_update_relaunch"] as const;
+const RELAUNCH_AFTER_UPDATE_COMMANDS = ["relaunch_after_update"] as const;
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
@@ -90,6 +93,10 @@ async function getInvoke(): Promise<InvokeFn | null> {
   return invokeCache;
 }
 
+async function requireNativeInvoke(message: string): Promise<void> {
+  if (!(await getInvoke())) throw new Error(message);
+}
+
 /** Calls the first candidate command the backend actually implements. */
 async function invokeAny<T>(
   key: string,
@@ -140,6 +147,27 @@ export async function requestRefresh(
 export async function signalFrontendReady(): Promise<boolean> {
   const result = await invokeAny<string>("frontend-ready", FRONTEND_READY_COMMANDS);
   return result === "native-bridge-ready";
+}
+
+/** Marks a Windows installer relaunch as user-visible before the updater exits. */
+export async function prepareUpdateRelaunch(version: string): Promise<void> {
+  await requireNativeInvoke("EyeUrAI could not reach the native update preparation command.");
+  await invokeAny<unknown>("prepare-update-relaunch", PREPARE_UPDATE_RELAUNCH_COMMANDS, {
+    version,
+  });
+}
+
+/** Clears update relaunch state when download or installation fails in place. */
+export async function cancelUpdateRelaunch(): Promise<void> {
+  if (!isTauri()) return;
+  await requireNativeInvoke("EyeUrAI could not reach the native update cancellation command.");
+  await invokeAny<unknown>("cancel-update-relaunch", CANCEL_UPDATE_RELAUNCH_COMMANDS);
+}
+
+/** Relaunches the installed update through the platform-owned launch path. */
+export async function relaunchAfterUpdate(): Promise<void> {
+  await requireNativeInvoke("EyeUrAI could not reach the native update relaunch command.");
+  await invokeAny<unknown>("relaunch-after-update", RELAUNCH_AFTER_UPDATE_COMMANDS);
 }
 
 /** Starts an official Codex browser login in a new isolated CODEX_HOME. */

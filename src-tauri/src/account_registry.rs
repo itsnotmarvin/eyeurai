@@ -63,14 +63,18 @@ pub struct AccountSnapshotRegistry {
 }
 
 impl AccountSnapshotRegistry {
+    pub fn empty(app_data_dir: impl AsRef<Path>) -> Self {
+        AccountSnapshotRegistry {
+            directory: app_data_dir.as_ref().join(REGISTRY_DIRECTORY),
+            generation: 0,
+            accounts: BTreeMap::new(),
+        }
+    }
+
     pub fn load(app_data_dir: impl AsRef<Path>) -> io::Result<Self> {
         let directory = app_data_dir.as_ref().join(REGISTRY_DIRECTORY);
         let Some(persisted) = read_latest_generation(&directory)? else {
-            return Ok(AccountSnapshotRegistry {
-                directory,
-                generation: 0,
-                accounts: BTreeMap::new(),
-            });
+            return Ok(AccountSnapshotRegistry::empty(app_data_dir));
         };
 
         let accounts = persisted

@@ -1,7 +1,7 @@
 {
   "name": "eyeurai",
   "private": true,
-  "version": "1.3.1",
+  "version": "1.4.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/itsnotmarvin/eyeurai.git"
@@ -34,7 +34,6 @@
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-notification": "2.3.3",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -47,9 +46,9 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "latest",
     "esbuild": "0.28.2",
-    "jsdom": "29.0.1",
+    "jsdom": "29.1.1",
     "typescript": "7.0.2",
-    "vite": "8.2.1",
+    "vite": "8.2.2",
     "vitest": "latest"
   }
 }

@@ -48,6 +48,72 @@ describe("useSnapshot", () => {
     await waitFor(() => expect(requestRefresh).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps a newer pushed snapshot when the initial request resolves later", async () => {
+    const olderSnapshot = createDemoSnapshot(Date.parse("2026-08-20T12:00:00Z"));
+    const newerSnapshot = createDemoSnapshot(Date.parse("2026-08-20T12:02:00Z"));
+    let resolveInitial!: (snapshot: ReturnType<typeof createDemoSnapshot>) => void;
+    const initialResult = new Promise<ReturnType<typeof createDemoSnapshot>>((resolve) => {
+      resolveInitial = resolve;
+    });
+    let emitSnapshot: ((snapshot: ReturnType<typeof createDemoSnapshot>) => void) | undefined;
+
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    const fetchSnapshot = vi.spyOn(ipc, "fetchSnapshot").mockReturnValue(initialResult);
+    vi.spyOn(ipc, "subscribeToSnapshots").mockImplementation(async (listener) => {
+      emitSnapshot = listener;
+      return () => {};
+    });
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+
+    const { result } = renderHook(() => useSnapshot());
+    await waitFor(() => {
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+      expect(emitSnapshot).toBeTypeOf("function");
+    });
+
+    act(() => emitSnapshot!(newerSnapshot));
+    expect(result.current.snapshot).toBe(newerSnapshot);
+
+    await act(async () => {
+      resolveInitial(olderSnapshot);
+      await initialResult;
+    });
+
+    expect(result.current.snapshot).toBe(newerSnapshot);
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("ignores an obsolete request error after accepting a pushed snapshot", async () => {
+    const newerSnapshot = createDemoSnapshot(Date.parse("2026-08-20T12:02:00Z"));
+    let resolveInitial!: (snapshot: null) => void;
+    const initialResult = new Promise<null>((resolve) => {
+      resolveInitial = resolve;
+    });
+    let emitSnapshot: ((snapshot: ReturnType<typeof createDemoSnapshot>) => void) | undefined;
+
+    vi.spyOn(ipc, "isTauri").mockReturnValue(true);
+    vi.spyOn(ipc, "fetchSnapshot").mockReturnValue(initialResult);
+    vi.spyOn(ipc, "subscribeToSnapshots").mockImplementation(async (listener) => {
+      emitSnapshot = listener;
+      return () => {};
+    });
+    vi.spyOn(ipc, "subscribeToRefreshRequests").mockResolvedValue(() => {});
+
+    const { result } = renderHook(() => useSnapshot());
+    await waitFor(() => expect(emitSnapshot).toBeTypeOf("function"));
+
+    act(() => emitSnapshot!(newerSnapshot));
+    await act(async () => {
+      resolveInitial(null);
+      await initialResult;
+    });
+
+    expect(result.current.snapshot).toBe(newerSnapshot);
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.error).toBeNull();
+  });
+
   it("automatically re-reads live provider usage without showing a manual refresh", async () => {
     const intervalMs = 15_000;
     vi.useFakeTimers();

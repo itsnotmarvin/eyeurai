@@ -25,10 +25,11 @@ export interface ProviderSectionProps {
   onRemediate?: (account: Account) => void;
 }
 
-/** Highest usage across every window of every account in the group. */
+/** Highest usage across every window backed by a fresh account in the group. */
 function peakPercent(accounts: Account[]): number | null {
   let peak: number | null = null;
   for (const account of accounts) {
+    if (account.status !== "fresh") continue;
     for (const window of account.windows) {
       if (peak === null || window.percentUsed > peak) peak = window.percentUsed;
     }

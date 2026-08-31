@@ -38,16 +38,21 @@ describe("Onboarding", () => {
   });
 
   it("blocks continuing until at least one provider is picked", () => {
-    setup();
+    const { onComplete } = setup();
     for (const checkbox of screen.getAllByRole("checkbox")) {
       fireEvent.click(checkbox);
     }
 
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
     expect(screen.getByText("Pick at least one provider to continue.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onComplete).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /Gemini/ }));
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeEnabled();
   });
 
   it("keeps providers in canonical order regardless of click order", () => {

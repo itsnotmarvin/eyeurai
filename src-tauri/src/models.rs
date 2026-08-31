@@ -514,7 +514,6 @@ impl Freshness {
         }
     }
 
-    #[cfg(test)]
     pub fn cached(fetched_at: DateTime<Utc>, now: DateTime<Utc>, stale_after_seconds: i64) -> Self {
         let age = (now - fetched_at).num_seconds().max(0);
         Freshness {
@@ -980,6 +979,23 @@ impl QuotaSnapshot {
             }
         }
     }
+
+    /// Marks a previously live in-process snapshot as cached and recomputes
+    /// freshness from each fragment's original fetch time.
+    pub fn refresh_cached(&mut self, now: DateTime<Utc>, stale_after_seconds: i64) {
+        self.source = DataSource::Cache;
+        self.refresh_countdowns(now);
+        for provider in &mut self.providers {
+            if let Some(fetched_at) = provider.freshness.fetched_at {
+                provider.freshness = Freshness::cached(fetched_at, now, stale_after_seconds);
+            }
+            for account in &mut provider.accounts {
+                if let Some(fetched_at) = account.freshness.fetched_at {
+                    account.freshness = Freshness::cached(fetched_at, now, stale_after_seconds);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,6 +1216,35 @@ mod tests {
         let stale = Freshness::cached(fetched, ts(1_200), 60);
         assert!(stale.stale);
         assert_eq!(stale.age_seconds, Some(200));
+    }
+
+    #[test]
+    fn cached_snapshot_recomputes_source_age_staleness_and_countdowns() {
+        let fetched = ts(1_000);
+        let mut account = AccountSnapshot::new("acct-1", "user@example.com");
+        account.freshness = Freshness::live(fetched);
+        account.windows = vec![QuotaWindow::new("five_hour", "5-hour", WindowKind::Rolling)
+            .with_used_percent(50.0)
+            .with_reset(ts(1_500), fetched)];
+        let mut provider = ProviderSnapshot::new(capability()).with_accounts(vec![account]);
+        provider.freshness = Freshness::live(fetched);
+        let mut snapshot = QuotaSnapshot::new(fetched, DataSource::Live, vec![provider]);
+
+        snapshot.refresh_cached(ts(1_400), 300);
+
+        assert_eq!(snapshot.source, DataSource::Cache);
+        assert_eq!(snapshot.providers[0].freshness.source, DataSource::Cache);
+        assert!(snapshot.providers[0].freshness.stale);
+        assert_eq!(snapshot.providers[0].freshness.age_seconds, Some(400));
+        assert_eq!(
+            snapshot.providers[0].accounts[0].freshness.source,
+            DataSource::Cache
+        );
+        assert!(snapshot.providers[0].accounts[0].freshness.stale);
+        assert_eq!(
+            snapshot.providers[0].accounts[0].windows[0].resets_in_seconds,
+            Some(100)
+        );
     }
 
     #[test]

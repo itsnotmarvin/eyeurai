@@ -8,7 +8,6 @@
     "core:window:allow-start-dragging",
     "notification:default",
     "autostart:default",
-    "updater:default",
-    "process:allow-restart"
+    "updater:default"
   ]
 }

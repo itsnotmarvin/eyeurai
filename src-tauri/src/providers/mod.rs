@@ -150,8 +150,10 @@ impl ProviderContext {
 /// Collapse duplicate rows only when both connections expose the same stable
 /// provider-principal fingerprint. Labels (including email addresses) are not
 /// identity: two workspace principals can legitimately share one. The
-/// independently managed profile wins exact matches, while ambiguous rows
-/// remain visible and exact account-id duplicates keep their first occurrence.
+/// independently managed profile wins exact matches only when it has usable
+/// data. A broken managed profile must not hide a healthy terminal connection.
+/// Ambiguous rows remain visible and exact account-id duplicates keep their
+/// first occurrence.
 pub fn prefer_managed_accounts(
     results: &mut Vec<crate::models::AccountSnapshot>,
     managed_prefix: &str,
@@ -159,6 +161,7 @@ pub fn prefer_managed_accounts(
     let managed_principals: std::collections::BTreeSet<String> = results
         .iter()
         .filter(|account| account.account_id.starts_with(managed_prefix))
+        .filter(|account| account.status.has_data())
         .filter_map(|account| account.principal_id.clone())
         .collect();
     results.retain(|account| {
@@ -374,6 +377,22 @@ mod tests {
                 "claude:def456"
             ]
         );
+    }
+
+    #[test]
+    fn failed_managed_profile_does_not_hide_a_healthy_cli_account() {
+        let mut terminal = AccountSnapshot::new("claude:abc123", "dev@example.com");
+        terminal.principal_id = Some("claude:abc123".to_string());
+        let mut managed = AccountSnapshot::new("claude-profile:profile-1", "dev@example.com");
+        managed.principal_id = Some("claude:abc123".to_string());
+        managed.status = ProviderStatus::Error;
+        let mut results = vec![terminal, managed];
+
+        prefer_managed_accounts(&mut results, "claude-profile:");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].account_id, "claude:abc123");
+        assert_eq!(results[1].account_id, "claude-profile:profile-1");
     }
 
     #[test]

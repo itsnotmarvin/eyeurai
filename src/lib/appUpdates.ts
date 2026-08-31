@@ -1,4 +1,9 @@
-import { isTauri } from "./ipc";
+import {
+  cancelUpdateRelaunch,
+  isTauri,
+  prepareUpdateRelaunch,
+  relaunchAfterUpdate,
+} from "./ipc";
 
 export interface AppUpdateInfo {
   currentVersion: string;
@@ -27,6 +32,7 @@ type DownloadEvent =
   | { event: "Finished" };
 
 let pendingUpdate: PendingUpdate | null = null;
+let installedUpdateAwaitingRelaunch = false;
 
 function normalizedNotes(body?: string): string | null {
   const notes = body?.trim();
@@ -112,36 +118,73 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
 export async function installAppUpdate(
   onProgress: (progress: AppUpdateProgress) => void,
 ): Promise<void> {
+  // If installation succeeded but the readiness handshake failed, retry only
+  // the relaunch. Reusing the consumed updater resource could reinstall the
+  // same payload and leaves platform-specific resource state ambiguous.
+  if (installedUpdateAwaitingRelaunch) {
+    onProgress({ stage: "installing", percent: 100 });
+    await relaunchAfterUpdate();
+    installedUpdateAwaitingRelaunch = false;
+    return;
+  }
   if (!pendingUpdate) throw new Error("No EyeUrAI update is ready to install.");
+  const update = pendingUpdate;
 
   let downloaded = 0;
   let total: number | null = null;
-  await pendingUpdate.downloadAndInstall(
-    (event) => {
-      if (event.event === "Started") {
-        total = event.data.contentLength ?? null;
-        onProgress({ stage: "downloading", percent: total === 0 ? 0 : null });
-      } else if (event.event === "Progress") {
-        downloaded += event.data.chunkLength;
-        const percent = total && total > 0
-          ? Math.min(99, Math.round((downloaded / total) * 100))
-          : null;
-        onProgress({ stage: "downloading", percent });
-      } else {
-        onProgress({ stage: "installing", percent: 100 });
-      }
-    },
-    { timeout: 120_000 },
-  );
+  await prepareUpdateRelaunch(update.version);
+  try {
+    await update.downloadAndInstall(
+      (event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? null;
+          onProgress({ stage: "downloading", percent: total === 0 ? 0 : null });
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          const percent = total && total > 0
+            ? Math.min(99, Math.round((downloaded / total) * 100))
+            : null;
+          onProgress({ stage: "downloading", percent });
+        } else {
+          onProgress({ stage: "installing", percent: 100 });
+        }
+      },
+      { timeout: 120_000 },
+    );
+  } catch (cause) {
+    // Windows exits inside a successful install, so this runs only when the
+    // current process remains alive and the one-use visibility marker is stale.
+    try {
+      await cancelUpdateRelaunch();
+    } catch {
+      // Preserve the actionable download/install error for the user.
+    }
+    throw cause;
+  }
 
+  pendingUpdate = null;
+  installedUpdateAwaitingRelaunch = true;
+  try {
+    await update.close();
+  } catch {
+    // The signed update is already installed. Resource cleanup must not block
+    // the only useful next action: handing off to the replacement process.
+  }
   onProgress({ stage: "installing", percent: 100 });
-  const { relaunch } = await import("@tauri-apps/plugin-process");
-  await relaunch();
+  await relaunchAfterUpdate();
+  installedUpdateAwaitingRelaunch = false;
 }
 
 /** Test seam for releasing the native updater resource between tests. */
 export async function resetAppUpdateForTests(): Promise<void> {
   const update = pendingUpdate;
   pendingUpdate = null;
+  installedUpdateAwaitingRelaunch = false;
   if (update) await update.close();
+}
+
+/** Test seam for exercising installation without contacting the release feed. */
+export function setPendingAppUpdateForTests(update: PendingUpdate): void {
+  installedUpdateAwaitingRelaunch = false;
+  pendingUpdate = update;
 }

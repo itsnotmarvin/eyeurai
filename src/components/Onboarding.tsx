@@ -50,6 +50,7 @@ export function Onboarding({ initial, onComplete, requestPermission }: Onboardin
   }
 
   function finish(): void {
+    if (!canContinue) return;
     onComplete({ ...draft, onboardingCompleted: true });
   }
 
@@ -155,7 +156,12 @@ export function Onboarding({ initial, onComplete, requestPermission }: Onboardin
         </div>
         <div className="onboarding__buttons">
           {step === 0 ? (
-            <button type="button" className="btn btn--ghost" onClick={finish}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={!canContinue}
+              onClick={finish}
+            >
               Skip
             </button>
           ) : (

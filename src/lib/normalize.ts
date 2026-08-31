@@ -209,7 +209,11 @@ function defaultSource(provider: ProviderId): AuthSource {
 
 function normalizeStatus(raw: unknown, stale: boolean): AccountStatus {
   if (stale) return "stale";
-  if (typeof raw !== "string") return "fresh";
+  // Preserve legacy payloads that predate an explicit status field, but fail
+  // closed when a present value is malformed or comes from a newer backend we
+  // do not understand. Unknown state must never contribute to a live peak.
+  if (raw === undefined) return "fresh";
+  if (typeof raw !== "string") return "stale";
   const value = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (value === "fresh" || value === "ok") return "fresh";
   if (value === "pending") return "pending";
@@ -222,7 +226,7 @@ function normalizeStatus(raw: unknown, stale: boolean): AccountStatus {
   ) {
     return "error";
   }
-  return "fresh";
+  return "stale";
 }
 
 const REMEDIATION_KINDS: readonly RemediationChoiceKind[] = [

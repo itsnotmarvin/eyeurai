@@ -1,4 +1,15 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use std::process::Stdio;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::time::Instant;
+#[cfg(any(target_os = "windows", test))]
+use std::time::SystemTime;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -17,10 +28,37 @@ mod remediation;
 
 const MAX_TRAY_LABEL_CHARS: usize = 8;
 const STARTUP_SMOKE_ARGUMENT: &str = "--startup-smoke-marker=";
-const STARTUP_SMOKE_CONTENT: &str = "native-bridge-ready\n";
+const STARTUP_SMOKE_STARTED_PREFIX: &str = "native-bridge-started:";
+const STARTUP_SMOKE_READY_PREFIX: &str = "native-bridge-ready:";
+const STARTUP_SMOKE_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const UPDATE_RELAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(any(target_os = "windows", test))]
+const UPDATE_RELAUNCH_VISIBLE_MARKER: &str = "update-relaunch-visible-v1";
+#[cfg(any(target_os = "windows", test))]
+const UPDATE_RELAUNCH_VISIBLE_RECOVERY_MARKER: &str = "update-relaunch-visible-v1.tmp";
+#[cfg(any(target_os = "windows", test))]
+const UPDATE_RELAUNCH_VISIBLE_PREFIX: &str = "show-updated-app:";
+#[cfg(any(target_os = "windows", test))]
+const UPDATE_RELAUNCH_VISIBLE_MAX_AGE: Duration = Duration::from_secs(15 * 60);
+#[cfg(any(target_os = "windows", test))]
+const UPDATE_RELAUNCH_VISIBLE_MAX_BYTES: u64 = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupSmokePhase {
+    Started,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupSmokeMarker {
+    phase: StartupSmokePhase,
+    process_id: u32,
+}
 
 struct StartupSmokeState {
     marker_path: Option<PathBuf>,
+    ready: Arc<AtomicBool>,
 }
 
 fn startup_smoke_marker_from(arguments: impl IntoIterator<Item = String>) -> Option<PathBuf> {
@@ -32,17 +70,400 @@ fn startup_smoke_marker_from(arguments: impl IntoIterator<Item = String>) -> Opt
     })
 }
 
+fn startup_smoke_content(phase: StartupSmokePhase, process_id: u32) -> String {
+    let prefix = match phase {
+        StartupSmokePhase::Started => STARTUP_SMOKE_STARTED_PREFIX,
+        StartupSmokePhase::Ready => STARTUP_SMOKE_READY_PREFIX,
+    };
+    format!("{prefix}{process_id}\n")
+}
+
+fn parse_startup_smoke_marker(contents: &str) -> Option<StartupSmokeMarker> {
+    let contents = contents.trim();
+    let (phase, process_id) = contents
+        .strip_prefix(STARTUP_SMOKE_STARTED_PREFIX)
+        .map(|process_id| (StartupSmokePhase::Started, process_id))
+        .or_else(|| {
+            contents
+                .strip_prefix(STARTUP_SMOKE_READY_PREFIX)
+                .map(|process_id| (StartupSmokePhase::Ready, process_id))
+        })?;
+    let process_id = process_id
+        .parse()
+        .ok()
+        .filter(|process_id| *process_id > 0)?;
+    Some(StartupSmokeMarker { phase, process_id })
+}
+
+fn read_startup_smoke_marker(marker_path: &Path) -> Option<StartupSmokeMarker> {
+    std::fs::read_to_string(marker_path)
+        .ok()
+        .and_then(|contents| parse_startup_smoke_marker(&contents))
+}
+
+fn write_startup_smoke_marker(marker_path: &Path, phase: StartupSmokePhase) -> std::io::Result<()> {
+    // The launcher creates this file as a one-use lease. Opening it without
+    // `create` prevents a replacement that starts after the old instance has
+    // timed out (and removed the lease) from lingering as a duplicate. Unix
+    // launchers also refuse a replaced symlink instead of truncating its target.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut marker = options.open(marker_path)?;
+    if !marker.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "startup marker lease is not a regular file",
+        ));
+    }
+    let contents = startup_smoke_content(phase, std::process::id());
+    std::io::Write::write_all(&mut marker, contents.as_bytes())
+}
+
 #[tauri::command]
 fn frontend_ready(state: tauri::State<'_, StartupSmokeState>) -> Result<&'static str, String> {
     if let Some(marker_path) = &state.marker_path {
-        std::fs::write(marker_path, STARTUP_SMOKE_CONTENT).map_err(|error| {
+        write_startup_smoke_marker(marker_path, StartupSmokePhase::Ready).map_err(|error| {
             format!(
                 "could not write the startup smoke marker at {}: {error}",
                 marker_path.display()
             )
         })?;
     }
+    state.ready.store(true, Ordering::Release);
     Ok("native-bridge-ready")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_visible_marker_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(UPDATE_RELAUNCH_VISIBLE_MARKER)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_visible_recovery_marker_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(UPDATE_RELAUNCH_VISIBLE_RECOVERY_MARKER)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn valid_update_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 64
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_visible_content(version: &str) -> String {
+    format!("{UPDATE_RELAUNCH_VISIBLE_PREFIX}{version}")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn write_update_relaunch_visible_marker(app_data_dir: &Path, version: &str) -> std::io::Result<()> {
+    if !valid_update_version(version) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "update version is invalid",
+        ));
+    }
+    std::fs::create_dir_all(app_data_dir)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".update-relaunch-visible-v1.tmp-")
+        .tempfile_in(app_data_dir)?;
+    std::io::Write::write_all(
+        &mut temporary,
+        update_relaunch_visible_content(version).as_bytes(),
+    )?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(update_relaunch_visible_marker_path(app_data_dir))
+        .map_err(|error| error.error)?;
+
+    // A successful runtime preparation supersedes any recovery file left by
+    // an interrupted NSIS rename. The committed final marker is already valid,
+    // so cleanup failure is harmless and must not turn preparation into a lie.
+    let _ = std::fs::remove_file(update_relaunch_visible_recovery_marker_path(app_data_dir));
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn remove_update_relaunch_visible_marker(app_data_dir: &Path) -> std::io::Result<()> {
+    let mut first_error = None;
+    for marker_path in [
+        update_relaunch_visible_marker_path(app_data_dir),
+        update_relaunch_visible_recovery_marker_path(app_data_dir),
+    ] {
+        match std::fs::remove_file(marker_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        };
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_marker_is_fresh(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age <= UPDATE_RELAUNCH_VISIBLE_MAX_AGE)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_marker_matches(marker_path: &Path, version: &str, now: SystemTime) -> bool {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // Open the reparse point itself so a same-user symlink cannot redirect
+        // this bounded visibility-only read to an unrelated file.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let Ok(mut marker) = options.open(marker_path) else {
+        return false;
+    };
+    let Ok(metadata) = marker.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() > UPDATE_RELAUNCH_VISIBLE_MAX_BYTES {
+        return false;
+    }
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    if !update_relaunch_marker_is_fresh(modified, now) {
+        return false;
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut bounded = std::io::Read::take(&mut marker, UPDATE_RELAUNCH_VISIBLE_MAX_BYTES + 1);
+    if std::io::Read::read_to_end(&mut bounded, &mut bytes).is_err()
+        || bytes.len() as u64 > UPDATE_RELAUNCH_VISIBLE_MAX_BYTES
+    {
+        return false;
+    }
+    bytes == update_relaunch_visible_content(version).as_bytes()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn has_fresh_update_relaunch_visible_marker(
+    app_data_dir: &Path,
+    version: &str,
+    now: SystemTime,
+) -> bool {
+    [
+        update_relaunch_visible_marker_path(app_data_dir),
+        update_relaunch_visible_recovery_marker_path(app_data_dir),
+    ]
+    .iter()
+    .any(|marker_path| update_relaunch_marker_matches(marker_path, version, now))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_relaunch_visibility_requested(
+    app_data_dir: &Path,
+    version: &str,
+    now: SystemTime,
+) -> bool {
+    let requested = has_fresh_update_relaunch_visible_marker(app_data_dir, version, now);
+    if !requested {
+        // Invalid state is consumed immediately. Valid state remains until the
+        // window reports that it was actually shown.
+        let _ = remove_update_relaunch_visible_marker(app_data_dir);
+    }
+    requested
+}
+
+/// Before the Tauri updater hands a Windows update to NSIS/MSI, record that
+/// the replacement must be shown even when the installer inherits `--hidden`
+/// from a login-item launch. The Windows updater exits the process internally,
+/// so this durable one-use marker is consumed by the replacement at startup.
+#[tauri::command]
+fn prepare_update_relaunch(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("EyeUrAI could not prepare the update restart: {error}"))?;
+        write_update_relaunch_visible_marker(&app_data_dir, &version)
+            .map_err(|error| format!("EyeUrAI could not prepare the update restart: {error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, version);
+    Ok(())
+}
+
+/// Remove the Windows visibility marker when download or installation fails
+/// without terminating the current process.
+#[tauri::command]
+fn cancel_update_relaunch(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("EyeUrAI could not cancel the update restart: {error}"))?;
+        remove_update_relaunch_visible_marker(&app_data_dir)
+            .map_err(|error| format!("EyeUrAI could not cancel the update restart: {error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn wait_for_replacement_ready(marker_path: &Path) -> bool {
+    let deadline = Instant::now() + UPDATE_RELAUNCH_READY_TIMEOUT;
+    loop {
+        if read_startup_smoke_marker(marker_path)
+            .is_some_and(|marker| marker.phase == StartupSmokePhase::Ready)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_app_bundle(executable_path: &Path) -> Option<PathBuf> {
+    let macos_directory = executable_path.parent()?;
+    if macos_directory.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents_directory = macos_directory.parent()?;
+    if contents_directory.file_name()? != "Contents" {
+        return None;
+    }
+    let app_bundle = contents_directory.parent()?;
+    (app_bundle.extension()? == "app").then(|| app_bundle.to_path_buf())
+}
+
+/// Relaunch after an updater install without inheriting the old process state.
+/// macOS uses LaunchServices; Linux directly spawns the updated executable.
+/// Both keep the working process alive until the replacement frontend proves
+/// it reached the native bridge. Windows normally exits inside the updater
+/// plugin before this command can run, so its actual flow uses the durable
+/// visibility marker prepared before installation; this branch is a fallback.
+#[tauri::command]
+async fn relaunch_after_update(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Resolve this only when an update actually needs to relaunch. Tauri
+        // deliberately rejects symlinked executable paths on macOS, and making
+        // that relaunch-only check part of setup would prevent an otherwise
+        // healthy app from starting from a symlinked development/install path.
+        let executable_path = tauri::process::current_binary(&app.env()).map_err(|error| {
+            format!("EyeUrAI could not locate its executable for the update relaunch: {error}")
+        })?;
+        let app_bundle = macos_app_bundle(&executable_path).ok_or_else(|| {
+            "EyeUrAI could not locate its installed macOS application bundle.".to_string()
+        })?;
+        let marker = tempfile::NamedTempFile::new().map_err(|error| {
+            format!("EyeUrAI could not prepare its update relaunch check: {error}")
+        })?;
+        let marker_path = marker.path().to_path_buf();
+        let marker_argument = format!("{STARTUP_SMOKE_ARGUMENT}{}", marker_path.to_string_lossy());
+        let status = tokio::process::Command::new("/usr/bin/open")
+            .arg("-n")
+            .arg(&app_bundle)
+            .arg("--args")
+            .arg(marker_argument)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map_err(|error| format!("EyeUrAI could not ask macOS to reopen the app: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "macOS declined to reopen EyeUrAI after the update (status {status})."
+            ));
+        }
+
+        // Do not close the working instance until the replacement's React app
+        // has reached its own native bridge. This turns a silent relaunch miss
+        // into a visible error while preserving a usable process.
+        if !wait_for_replacement_ready(&marker_path).await {
+            // Cancel the launch lease before offering a retry. A replacement
+            // that started late observes the missing lease and exits, while a
+            // process that has not reached setup can no longer claim it.
+            drop(marker);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            return Err(
+                "The update installed, but the replacement EyeUrAI app did not become ready. The current window will stay open."
+                    .to_string(),
+            );
+        }
+        app.exit(0);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let executable_path = tauri::process::current_binary(&app.env()).map_err(|error| {
+            format!("EyeUrAI could not locate its executable for the update relaunch: {error}")
+        })?;
+        let marker = tempfile::NamedTempFile::new().map_err(|error| {
+            format!("EyeUrAI could not prepare its update relaunch check: {error}")
+        })?;
+        let marker_path = marker.path().to_path_buf();
+        let marker_argument = format!("{STARTUP_SMOKE_ARGUMENT}{}", marker_path.to_string_lossy());
+        let mut replacement = tokio::process::Command::new(executable_path)
+            .arg(marker_argument)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("EyeUrAI could not restart after the update: {error}"))?;
+
+        if !wait_for_replacement_ready(&marker_path).await {
+            let _ = replacement.kill().await;
+            return Err(
+                "The update installed, but the replacement EyeUrAI app did not become ready. The current window will stay open."
+                    .to_string(),
+            );
+        }
+        app.exit(0);
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // The plugin's normal Windows update path exits before JavaScript can
+        // invoke this command. Keep a clean-argument fallback for tests and for
+        // any future plugin version that returns after installing.
+        let executable_path = tauri::process::current_binary(&app.env()).map_err(|error| {
+            format!("EyeUrAI could not locate its executable for the update relaunch: {error}")
+        })?;
+        tokio::process::Command::new(executable_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("EyeUrAI could not restart after the update: {error}"))?;
+        app.exit(0);
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    Err("EyeUrAI update relaunch is available only on desktop platforms.".to_string())
 }
 
 fn sanitize_tray_label(raw_label: &str) -> Option<String> {
@@ -286,15 +707,16 @@ fn position_on_active_display<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     }
 }
 
-fn reveal_window<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+fn reveal_window<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     let _ = window.unminimize();
-    let _ = window.show();
+    let shown = window.show().is_ok();
     let _ = window.set_focus();
+    shown
 }
 
-fn summon_window<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+fn summon_window<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     position_on_active_display(window);
-    reveal_window(window);
+    reveal_window(window)
 }
 
 #[tauri::command]
@@ -359,7 +781,6 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
         ))
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
@@ -372,16 +793,69 @@ pub fn run() {
             local_usage::scan_local_usage,
             set_tray_display,
             frontend_ready,
+            prepare_update_relaunch,
+            cancel_update_relaunch,
+            relaunch_after_update,
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let app_data_dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
+            #[cfg(target_os = "windows")]
+            let show_after_update = update_relaunch_visibility_requested(
+                &app_data_dir,
+                &app.package_info().version.to_string(),
+                SystemTime::now(),
+            );
+            #[cfg(target_os = "windows")]
+            let update_marker_app_data_dir = app_data_dir.clone();
+            #[cfg(not(target_os = "windows"))]
+            let show_after_update = false;
             app.manage(commands::AppState::new(app_data_dir).map_err(std::io::Error::other)?);
+            let startup_smoke_ready = Arc::new(AtomicBool::new(false));
+            let startup_smoke_watchdog_marker = startup_smoke_marker.clone();
+            if let Some(marker_path) = &startup_smoke_marker {
+                // Claim the launcher's lease during native setup. Besides
+                // publishing an exact child PID for smoke cleanup, this makes a
+                // late replacement fail fast after its launcher removes the lease.
+                write_startup_smoke_marker(marker_path, StartupSmokePhase::Started)?;
+            }
             app.manage(StartupSmokeState {
                 marker_path: startup_smoke_marker,
+                ready: Arc::clone(&startup_smoke_ready),
             });
+
+            if let Some(marker_path) = startup_smoke_watchdog_marker {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let deadline = tokio::time::Instant::now() + STARTUP_SMOKE_WATCHDOG_TIMEOUT;
+                    loop {
+                        if startup_smoke_ready.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if !marker_path.exists() {
+                            // Confirm cancellation after a short grace period so
+                            // a launcher reading `ready:<pid>` cannot race the
+                            // immediately following in-process ready flag store.
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            if !startup_smoke_ready.load(Ordering::Acquire) && !marker_path.exists()
+                            {
+                                handle.exit(1);
+                                return;
+                            }
+                        }
+                        if tokio::time::Instant::now() >= deadline {
+                            // A relaunch/smoke instance that never reaches the
+                            // frontend bridge must not survive as a duplicate
+                            // tray process after its launcher has given up.
+                            handle.exit(1);
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                });
+            }
 
             let handle = app.handle().clone();
             let open_item = MenuItem::with_id(app, "open", "Open EyeUrAI", true, None::<&str>)?;
@@ -435,7 +909,16 @@ pub fn run() {
                         let _ = close_window.hide();
                     }
                 });
-                if !launched_hidden {
+                if !launched_hidden || show_after_update {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let shown = summon_window(&window);
+                        if show_after_update && shown {
+                            let _ =
+                                remove_update_relaunch_visible_marker(&update_marker_app_data_dir);
+                        }
+                    }
+                    #[cfg(not(target_os = "windows"))]
                     summon_window(&window);
                 }
             }
@@ -456,9 +939,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
 
-    use super::{format_tray_title, sanitize_tray_label, startup_smoke_marker_from};
+    use super::{
+        format_tray_title, has_fresh_update_relaunch_visible_marker, macos_app_bundle,
+        parse_startup_smoke_marker, remove_update_relaunch_visible_marker, sanitize_tray_label,
+        startup_smoke_content, startup_smoke_marker_from, update_relaunch_marker_is_fresh,
+        update_relaunch_visibility_requested, update_relaunch_visible_content,
+        update_relaunch_visible_marker_path, update_relaunch_visible_recovery_marker_path,
+        write_startup_smoke_marker, write_update_relaunch_visible_marker, StartupSmokeMarker,
+        StartupSmokePhase, UPDATE_RELAUNCH_VISIBLE_MAX_AGE, UPDATE_RELAUNCH_VISIBLE_MAX_BYTES,
+    };
 
     #[test]
     fn startup_smoke_marker_requires_a_non_empty_explicit_argument() {
@@ -475,6 +967,202 @@ mod tests {
                 "--startup-smoke-marker=".to_string(),
             ]),
             None
+        );
+    }
+
+    #[test]
+    fn startup_smoke_marker_requires_an_existing_launcher_lease() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker_path = directory.path().join("ready.txt");
+
+        let error = write_startup_smoke_marker(&marker_path, StartupSmokePhase::Ready)
+            .expect_err("the app must not recreate an expired launcher lease");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        std::fs::File::create(&marker_path).expect("create launcher lease");
+        write_startup_smoke_marker(&marker_path, StartupSmokePhase::Ready)
+            .expect("write active launcher lease");
+        assert_eq!(
+            parse_startup_smoke_marker(&std::fs::read_to_string(marker_path).expect("read marker")),
+            Some(StartupSmokeMarker {
+                phase: StartupSmokePhase::Ready,
+                process_id: std::process::id(),
+            })
+        );
+    }
+
+    #[test]
+    fn startup_smoke_marker_roundtrips_started_and_ready_states() {
+        for phase in [StartupSmokePhase::Started, StartupSmokePhase::Ready] {
+            assert_eq!(
+                parse_startup_smoke_marker(&startup_smoke_content(phase, 42)),
+                Some(StartupSmokeMarker {
+                    phase,
+                    process_id: 42,
+                })
+            );
+        }
+        assert_eq!(parse_startup_smoke_marker("native-bridge-ready:0"), None);
+        assert_eq!(parse_startup_smoke_marker("native-bridge-ready:nope"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_smoke_marker_refuses_a_replaced_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("must-not-change.txt");
+        let marker_path = directory.path().join("ready.txt");
+        std::fs::write(&target, "untouched").expect("write symlink target");
+        symlink(&target, &marker_path).expect("replace lease with symlink");
+
+        write_startup_smoke_marker(&marker_path, StartupSmokePhase::Ready)
+            .expect_err("startup marker writes must not follow symlinks");
+        assert_eq!(
+            std::fs::read_to_string(target).expect("read symlink target"),
+            "untouched"
+        );
+    }
+
+    #[test]
+    fn update_relaunch_visibility_marker_is_fresh_bounded_and_one_use() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
+        assert!(update_relaunch_marker_is_fresh(
+            now - UPDATE_RELAUNCH_VISIBLE_MAX_AGE,
+            now
+        ));
+        assert!(!update_relaunch_marker_is_fresh(
+            now - UPDATE_RELAUNCH_VISIBLE_MAX_AGE - std::time::Duration::from_secs(1),
+            now
+        ));
+        assert!(!update_relaunch_marker_is_fresh(
+            now + std::time::Duration::from_secs(1),
+            now
+        ));
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        write_update_relaunch_visible_marker(directory.path(), "1.3.2")
+            .expect("write visibility marker");
+        assert!(has_fresh_update_relaunch_visible_marker(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert!(!has_fresh_update_relaunch_visible_marker(
+            directory.path(),
+            "1.3.3",
+            SystemTime::now()
+        ));
+        assert!(update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert!(update_relaunch_visible_marker_path(directory.path()).exists());
+        remove_update_relaunch_visible_marker(directory.path()).expect("consume marker");
+        assert!(!update_relaunch_visible_marker_path(directory.path()).exists());
+        assert!(!has_fresh_update_relaunch_visible_marker(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+
+        // NSIS deliberately leaves its fully written temporary marker behind
+        // if the final rename fails. The replacement must still recover the
+        // visible launch and consume both names after window.show succeeds.
+        std::fs::write(
+            update_relaunch_visible_recovery_marker_path(directory.path()),
+            update_relaunch_visible_content("1.3.2"),
+        )
+        .expect("write recovery marker");
+        assert!(update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        remove_update_relaunch_visible_marker(directory.path()).expect("consume recovery marker");
+        assert!(!update_relaunch_visible_recovery_marker_path(directory.path()).exists());
+
+        write_update_relaunch_visible_marker(directory.path(), "1.3.3")
+            .expect("write mismatched marker");
+        assert!(!update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert!(!update_relaunch_visible_marker_path(directory.path()).exists());
+
+        std::fs::write(
+            update_relaunch_visible_marker_path(directory.path()),
+            "malformed\n",
+        )
+        .expect("write malformed marker");
+        assert!(!update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert!(!update_relaunch_visible_marker_path(directory.path()).exists());
+
+        std::fs::write(
+            update_relaunch_visible_marker_path(directory.path()),
+            vec![b'x'; UPDATE_RELAUNCH_VISIBLE_MAX_BYTES as usize + 1],
+        )
+        .expect("write oversized marker");
+        assert!(!update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert!(!update_relaunch_visible_marker_path(directory.path()).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_relaunch_visibility_marker_does_not_follow_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("unrelated.txt");
+        std::fs::write(&target, update_relaunch_visible_content("1.3.2"))
+            .expect("write unrelated target");
+        symlink(
+            &target,
+            update_relaunch_visible_marker_path(directory.path()),
+        )
+        .expect("create marker symlink");
+
+        assert!(!update_relaunch_visibility_requested(
+            directory.path(),
+            "1.3.2",
+            SystemTime::now()
+        ));
+        assert_eq!(
+            std::fs::read_to_string(target).expect("read unrelated target"),
+            update_relaunch_visible_content("1.3.2")
+        );
+    }
+
+    #[test]
+    fn macos_app_bundle_accepts_only_an_executable_inside_an_app_bundle() {
+        assert_eq!(
+            macos_app_bundle(Path::new(
+                "/Applications/EyeUrAI.app/Contents/MacOS/eyeurai"
+            )),
+            Some(PathBuf::from("/Applications/EyeUrAI.app"))
+        );
+        assert_eq!(
+            macos_app_bundle(Path::new("/tmp/eyeurai")),
+            None,
+            "a bare binary must never become a LaunchServices target"
+        );
+        assert_eq!(
+            macos_app_bundle(Path::new(
+                "/Applications/EyeUrAI.bundle/Contents/MacOS/eyeurai"
+            )),
+            None,
+            "only a .app bundle is launchable"
         );
     }
 

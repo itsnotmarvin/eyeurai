@@ -12,7 +12,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -24,6 +24,8 @@ use crate::providers::error::ProviderError;
 const PROFILE_LOCK_FILE: &str = ".eyeurai-profile.lock";
 static PROFILE_NONCE: AtomicU64 = AtomicU64::new(0);
 static PROFILE_LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+const PROFILE_OS_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const PROFILE_OS_LOCK_RETRY: Duration = Duration::from_millis(50);
 
 /// One provider's profile root (e.g. `codex-profiles-v1`) inside app data.
 pub struct ProfileStore {
@@ -41,6 +43,25 @@ pub struct ProfileAccessGuard {
 impl Drop for ProfileAccessGuard {
     fn drop(&mut self) {
         let _ = fs2::FileExt::unlock(&self.lock_file);
+    }
+}
+
+async fn lock_exclusive_with_timeout(lock_file: File, timeout: Duration) -> std::io::Result<File> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match fs2::FileExt::try_lock_exclusive(&lock_file) {
+            Ok(()) => return Ok(lock_file),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "profile lock remained busy",
+                    ));
+                }
+                tokio::time::sleep(PROFILE_OS_LOCK_RETRY).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -194,12 +215,15 @@ impl ProfileStore {
                 .open(lock_path)
                 .map_err(|_| ProviderError::internal("could not open the profile lock"))?
         };
-        let lock_file = tokio::task::spawn_blocking(move || {
-            fs2::FileExt::lock_exclusive(&lock_file).map(|_| lock_file)
-        })
-        .await
-        .map_err(|_| ProviderError::internal("the profile lock task stopped"))?
-        .map_err(|_| ProviderError::internal("could not lock the profile"))?;
+        let lock_file = lock_exclusive_with_timeout(lock_file, PROFILE_OS_LOCK_TIMEOUT)
+            .await
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    ProviderError::timeout("the account profile is busy in another EyeUrAI process")
+                } else {
+                    ProviderError::internal("could not lock the profile")
+                }
+            })?;
         Ok(ProfileAccessGuard {
             _in_process: in_process,
             lock_file,
@@ -385,6 +409,33 @@ mod tests {
         drop(guard);
         assert!(fs2::FileExt::try_lock_exclusive(&second).is_ok());
         let _ = fs2::FileExt::unlock(&second);
+    }
+
+    #[tokio::test]
+    async fn profile_os_lock_wait_has_a_deadline() {
+        let temp = TestDirectory::new();
+        fs::create_dir_all(&temp.0).unwrap();
+        let lock_path = temp.0.join("busy.lock");
+        let first = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&first).unwrap();
+        let second = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+
+        let error = lock_exclusive_with_timeout(second, Duration::from_millis(25))
+            .await
+            .expect_err("a busy profile lock must time out");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        let _ = fs2::FileExt::unlock(&first);
     }
 
     #[test]

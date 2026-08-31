@@ -64,7 +64,7 @@ describe("normalizeSnapshot", () => {
     expect(snapshot?.accounts[0]?.windows[0]?.percentUsed).toBe(12.5);
   });
 
-  it("clamps percentages and defaults unknown enums", () => {
+  it("clamps percentages and fails an explicit unknown status closed", () => {
     const snapshot = normalizeSnapshot({
       accounts: [
         {
@@ -76,11 +76,29 @@ describe("normalizeSnapshot", () => {
       ],
     });
     const account = snapshot?.accounts[0];
-    expect(account?.status).toBe("fresh");
+    expect(account?.status).toBe("stale");
     expect(account?.source).toBe("unknown");
     expect(account?.windows[0]?.percentUsed).toBe(100);
     expect(account?.windows[0]?.unit).toBe("percent");
     expect(account?.windows[0]?.kind).toBe("session");
+  });
+
+  it("keeps a missing legacy status fresh but rejects malformed explicit states", () => {
+    const snapshot = normalizeSnapshot({
+      accounts: [
+        { id: "legacy", provider: "openai" },
+        { id: "null", provider: "openai", status: null },
+        { id: "number", provider: "openai", status: 7 },
+        { id: "empty", provider: "openai", status: "" },
+      ],
+    });
+
+    expect(snapshot?.accounts.map(({ id, status }) => [id, status])).toEqual([
+      ["legacy", "fresh"],
+      ["null", "stale"],
+      ["number", "stale"],
+      ["empty", "stale"],
+    ]);
   });
 
   it("drops accounts with unknown providers but keeps the rest", () => {

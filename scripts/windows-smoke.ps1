@@ -4,51 +4,484 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version 2.0
 
-$installerPath = (Resolve-Path $Installer).Path
+if (-not $env:APPDATA) {
+  throw "APPDATA is unavailable; the Windows updater visibility marker cannot be tested safely."
+}
+
+$updateMarkerDirectory = Join-Path $env:APPDATA "com.eyeurai.desktop"
+$updateMarkerPath = Join-Path $updateMarkerDirectory "update-relaunch-visible-v1"
+$updateMarkerTempPath = "$updateMarkerPath.tmp"
+
+# The installer hook replaces this one-use marker during an update. Never run
+# against a real marker (or its in-progress temporary file) that was present
+# before the smoke test; launching any app could consume it as well.
+if ((Test-Path -LiteralPath $updateMarkerPath) -or
+    (Test-Path -LiteralPath $updateMarkerTempPath)) {
+  throw "Refusing to run: an EyeUrAI update visibility marker already exists at $updateMarkerPath"
+}
+
+$preExistingApps = @(Get-Process -Name "eyeurai" -ErrorAction SilentlyContinue)
+if ($preExistingApps.Count -gt 0) {
+  $preExistingProcessIds = ($preExistingApps | ForEach-Object { $_.Id }) -join ", "
+  throw "Refusing to run while a pre-existing EyeUrAI process is active (PID(s): $preExistingProcessIds)."
+}
+
+$installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $runId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { $PID }
 $runAttempt = if ($env:GITHUB_RUN_ATTEMPT) { $env:GITHUB_RUN_ATTEMPT } else { "local" }
-$installDir = Join-Path $env:RUNNER_TEMP "EyeUrAI-smoke-$runId-$runAttempt"
+$tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$installDir = Join-Path $tempRoot "EyeUrAI-smoke-$runId-$runAttempt-$([Guid]::NewGuid().ToString('N'))"
+$markerDirectory = Join-Path $tempRoot "EyeUrAI-smoke-markers-$runId-$runAttempt-$([Guid]::NewGuid().ToString('N'))"
+[void][System.IO.Directory]::CreateDirectory($markerDirectory)
 
-$install = Start-Process `
-  -FilePath $installerPath `
-  -ArgumentList "/S", "/D=$installDir" `
-  -Wait `
-  -PassThru
-if ($install.ExitCode -ne 0) {
-  throw "EyeUrAI installer exited with code $($install.ExitCode)"
+if (-not ("EyeUrAI.WindowsSmoke.NativeMethods" -as [type])) {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+namespace EyeUrAI.WindowsSmoke
+{
+    public static class NativeMethods
+    {
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+    }
+}
+"@
 }
 
-$executable = Get-ChildItem -Path $installDir -Filter "eyeurai.exe" -Recurse |
-  Select-Object -First 1
-if (-not $executable) {
-  throw "EyeUrAI executable was not installed under $installDir"
-}
+function ConvertTo-WindowsCommandLineArgument {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$Argument
+  )
 
-$markerPath = Join-Path $installDir "native-bridge-ready.txt"
-$app = Start-Process `
-  -FilePath $executable.FullName `
-  -ArgumentList "--startup-smoke-marker=$markerPath" `
-  -PassThru
-
-$deadline = (Get-Date).AddSeconds(20)
-while (-not (Test-Path $markerPath) -and (Get-Date) -lt $deadline) {
-  if ($app.HasExited) {
-    throw "EyeUrAI exited before its native bridge became ready with code $($app.ExitCode)"
+  if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+    return $Argument
   }
-  Start-Sleep -Milliseconds 250
+
+  # Follow CommandLineToArgvW/CRT escaping: double backslashes before a quote,
+  # and double trailing backslashes before the closing quote.
+  $escaped = [regex]::Replace($Argument, '(\\*)"', '$1$1\"')
+  $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+  return '"' + $escaped + '"'
 }
 
-if (-not (Test-Path $markerPath)) {
-  Stop-Process -Id $app.Id -Force
-  throw "EyeUrAI started, but its packaged frontend never reached the native command bridge"
+function Start-SmokeProcess {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [string[]]$Arguments
+  )
+
+  $argumentLine = ($Arguments | ForEach-Object {
+      ConvertTo-WindowsCommandLineArgument -Argument $_
+    }) -join ' '
+
+  return Start-Process `
+    -FilePath $FilePath `
+    -ArgumentList $argumentLine `
+    -PassThru
 }
 
-$marker = (Get-Content -Raw $markerPath).Trim()
-if ($marker -ne "native-bridge-ready") {
-  Stop-Process -Id $app.Id -Force
-  throw "EyeUrAI wrote an invalid native bridge smoke marker: $marker"
+function New-StartupMarkerLease {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  $markerPath = Join-Path $markerDirectory "$Name-$([Guid]::NewGuid().ToString('N')).txt"
+  [System.IO.File]::WriteAllText($markerPath, "")
+  return $markerPath
 }
 
-Stop-Process -Id $app.Id -Force
-Write-Host "EyeUrAI installed and its packaged frontend reached the native bridge."
+function Read-StartupMarker {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$MarkerPath
+  )
+
+  try {
+    $contents = [System.IO.File]::ReadAllText($MarkerPath).Trim()
+  } catch [System.IO.IOException] {
+    # The app truncates and rewrites this tiny file as its state advances.
+    return $null
+  }
+
+  if (-not $contents) {
+    return $null
+  }
+
+  $match = [regex]::Match(
+    $contents,
+    '^native-bridge-(started|ready):([1-9][0-9]*)$'
+  )
+  if (-not $match.Success) {
+    return [PSCustomObject]@{
+      IsValid = $false
+      Raw = $contents
+      Phase = $null
+      ProcessId = 0
+    }
+  }
+
+  return [PSCustomObject]@{
+    IsValid = $true
+    Raw = $contents
+    Phase = $match.Groups[1].Value
+    ProcessId = [int64]$match.Groups[2].Value
+  }
+}
+
+function Wait-NativeBridgeReady {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$MarkerPath,
+    [int64]$ExpectedProcessId = 0,
+    [int]$TimeoutSeconds = 30
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $observedProcessId = [int64]0
+  $lastInvalidMarker = $null
+
+  while ((Get-Date) -lt $deadline) {
+    if ($ExpectedProcessId -gt 0 -and
+        -not (Get-Process -Id $ExpectedProcessId -ErrorAction SilentlyContinue)) {
+      throw "EyeUrAI process $ExpectedProcessId exited before its native bridge became ready."
+    }
+
+    $marker = Read-StartupMarker -MarkerPath $MarkerPath
+    if ($null -ne $marker) {
+      if (-not $marker.IsValid) {
+        # Do not fail on a transient partial read while the marker is being
+        # rewritten. If it never becomes valid, report its last contents.
+        $lastInvalidMarker = $marker.Raw
+      } else {
+        $lastInvalidMarker = $null
+        $markerProcessId = [int64]$marker.ProcessId
+        if ($observedProcessId -gt 0 -and $markerProcessId -ne $observedProcessId) {
+          throw "EyeUrAI changed native bridge process IDs from $observedProcessId to $markerProcessId during startup."
+        }
+        if ($ExpectedProcessId -gt 0 -and $markerProcessId -ne $ExpectedProcessId) {
+          throw "EyeUrAI reported native bridge process $markerProcessId, expected $ExpectedProcessId."
+        }
+
+        $observedProcessId = $markerProcessId
+        if (-not (Get-Process -Id $observedProcessId -ErrorAction SilentlyContinue)) {
+          throw "EyeUrAI process $observedProcessId exited before its native bridge became ready."
+        }
+        if ($marker.Phase -eq "ready") {
+          return $observedProcessId
+        }
+      }
+    }
+
+    if ($observedProcessId -gt 0 -and
+        -not (Get-Process -Id $observedProcessId -ErrorAction SilentlyContinue)) {
+      throw "EyeUrAI process $observedProcessId exited before its native bridge became ready."
+    }
+
+    Start-Sleep -Milliseconds 250
+  }
+
+  if ($lastInvalidMarker) {
+    throw "EyeUrAI wrote an invalid native bridge smoke marker: $lastInvalidMarker"
+  }
+  throw "EyeUrAI started, but its packaged frontend never reached the native command bridge."
+}
+
+function Test-MainWindowVisible {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int64]$ProcessId
+  )
+
+  try {
+    $process = Get-Process -Id $ProcessId -ErrorAction Stop
+    $process.Refresh()
+    $windowHandle = $process.MainWindowHandle
+    if ($windowHandle -eq [IntPtr]::Zero) {
+      return $false
+    }
+    return [EyeUrAI.WindowsSmoke.NativeMethods]::IsWindowVisible($windowHandle)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-MainWindowVisible {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int64]$ProcessId,
+    [int]$TimeoutSeconds = 10
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+      throw "EyeUrAI process $ProcessId exited before its main window became visible."
+    }
+    if (Test-MainWindowVisible -ProcessId $ProcessId) {
+      return
+    }
+    Start-Sleep -Milliseconds 200
+  }
+
+  throw "EyeUrAI process $ProcessId reached its native bridge, but its main window was not visible."
+}
+
+function Assert-MainWindowRemainsHidden {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int64]$ProcessId,
+    [int]$ObservationSeconds = 3
+  )
+
+  $deadline = (Get-Date).AddSeconds($ObservationSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+      throw "Hidden EyeUrAI process $ProcessId exited during the visibility check."
+    }
+    if (Test-MainWindowVisible -ProcessId $ProcessId) {
+      throw "EyeUrAI process $ProcessId showed its main window despite a plain --hidden launch."
+    }
+    Start-Sleep -Milliseconds 200
+  }
+}
+
+function Stop-SmokeProcess {
+  param(
+    [int64]$ProcessId
+  )
+
+  if ($ProcessId -le 0) {
+    return
+  }
+  $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if ($null -ne $process) {
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    try {
+      [void]$process.WaitForExit(5000)
+    } catch {
+      # The process already exited or its handle became unavailable.
+    }
+  }
+}
+
+function Stop-ProcessesForMarker {
+  param(
+    [string]$ExecutablePath,
+    [string]$MarkerPath
+  )
+
+  if (-not $ExecutablePath -or -not $MarkerPath) {
+    return
+  }
+
+  # If startup failed before a valid PID could be read, the unique marker
+  # argument still lets cleanup find the exact smoke instance without touching
+  # a pre-existing user process.
+  $markerArgument = "--startup-smoke-marker=$MarkerPath"
+  $marker = Read-StartupMarker -MarkerPath $MarkerPath
+  if ($null -ne $marker -and $marker.IsValid) {
+    Stop-SmokeProcess -ProcessId ([int64]$marker.ProcessId)
+  }
+
+  try {
+    $processes = Get-CimInstance Win32_Process -Filter "Name = 'eyeurai.exe'" -ErrorAction Stop
+    foreach ($process in $processes) {
+      if ($process.CommandLine -and
+          $process.CommandLine.IndexOf($markerArgument, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+          ((-not $process.ExecutablePath) -or
+           [string]::Equals($process.ExecutablePath, $ExecutablePath, [System.StringComparison]::OrdinalIgnoreCase))) {
+        Stop-SmokeProcess -ProcessId ([int64]$process.ProcessId)
+      }
+    }
+  } catch {
+    Write-Warning "Could not scan for an EyeUrAI smoke process during cleanup: $($_.Exception.Message)"
+  }
+}
+
+function Stop-SmokeProcessesAtExecutable {
+  param(
+    [string]$ExecutablePath
+  )
+
+  if (-not $ExecutablePath) {
+    return
+  }
+
+  # The installer target is unique to this smoke run. This final fallback also
+  # catches a broken NSIS /ARGS handoff that launches the test executable but
+  # drops the marker argument entirely.
+  try {
+    $processes = Get-CimInstance Win32_Process -Filter "Name = 'eyeurai.exe'" -ErrorAction Stop
+    foreach ($process in $processes) {
+      if ($process.ExecutablePath -and
+          [string]::Equals($process.ExecutablePath, $ExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Stop-SmokeProcess -ProcessId ([int64]$process.ProcessId)
+      }
+    }
+  } catch {
+    Write-Warning "Could not scan the smoke install for an EyeUrAI process during cleanup: $($_.Exception.Message)"
+  }
+}
+
+$executablePath = $null
+$freshMarkerPath = $null
+$freshApp = $null
+$updateStartupMarkerPath = $null
+$updateAppProcessId = [int64]0
+$updateInstaller = $null
+$hiddenMarkerPath = $null
+$hiddenApp = $null
+$ownsUpdateMarker = $false
+
+try {
+  $install = Start-SmokeProcess `
+    -FilePath $installerPath `
+    -Arguments @("/S", "/D=$installDir")
+  $install.WaitForExit()
+  if ($install.ExitCode -ne 0) {
+    throw "EyeUrAI installer exited with code $($install.ExitCode)"
+  }
+
+  $executable = Get-ChildItem -LiteralPath $installDir -Filter "eyeurai.exe" -Recurse |
+    Select-Object -First 1
+  if (-not $executable) {
+    throw "EyeUrAI executable was not installed under $installDir"
+  }
+  $executablePath = $executable.FullName
+
+  # Preserve the original packaged-app bridge smoke test.
+  $freshMarkerPath = New-StartupMarkerLease -Name "fresh"
+  try {
+    $freshApp = Start-SmokeProcess `
+      -FilePath $executablePath `
+      -Arguments @("--startup-smoke-marker=$freshMarkerPath")
+    $freshProcessId = Wait-NativeBridgeReady `
+      -MarkerPath $freshMarkerPath `
+      -ExpectedProcessId $freshApp.Id
+    Write-Host "EyeUrAI installed and its packaged frontend reached the native bridge (PID $freshProcessId)."
+  } finally {
+    if ($null -ne $freshApp) {
+      Stop-SmokeProcess -ProcessId $freshApp.Id
+    }
+    Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $freshMarkerPath
+  }
+
+  if ((Test-Path -LiteralPath $updateMarkerPath) -or
+      (Test-Path -LiteralPath $updateMarkerTempPath)) {
+    throw "Refusing to start the update smoke test because a visibility marker appeared at $updateMarkerPath"
+  }
+
+  # Match the NSIS arguments emitted by tauri-plugin-updater. The installer
+  # hook writes the visibility marker, while /ARGS deliberately carries the
+  # inherited --hidden flag and this launch's unique PID marker to the app.
+  $updateStartupMarkerPath = New-StartupMarkerLease -Name "update"
+  $ownsUpdateMarker = $true
+  try {
+    $updateInstaller = Start-SmokeProcess `
+      -FilePath $installerPath `
+      -Arguments @(
+        "/P",
+        "/R",
+        "/UPDATE",
+        "/ARGS",
+        "--hidden",
+        "--startup-smoke-marker=$updateStartupMarkerPath"
+      )
+
+    # NSIS can spawn the replacement independently of the process handle
+    # returned above. Trust only the native marker's exact app PID.
+    $updateAppProcessId = Wait-NativeBridgeReady `
+      -MarkerPath $updateStartupMarkerPath `
+      -TimeoutSeconds 60
+    Wait-MainWindowVisible -ProcessId $updateAppProcessId
+
+    if (Test-Path -LiteralPath $updateMarkerPath) {
+      throw "EyeUrAI showed after the update, but did not consume $updateMarkerPath"
+    }
+    if (Test-Path -LiteralPath $updateMarkerTempPath) {
+      throw "The NSIS updater left its temporary visibility marker behind at $updateMarkerTempPath"
+    }
+
+    if (-not $updateInstaller.HasExited -and -not $updateInstaller.WaitForExit(15000)) {
+      throw "The EyeUrAI update installer did not exit after relaunching the app."
+    }
+    if ($updateInstaller.HasExited -and $updateInstaller.ExitCode -ne 0) {
+      throw "EyeUrAI update installer exited with code $($updateInstaller.ExitCode)"
+    }
+
+    # The marker is gone because the app consumed it, so later cleanup must not
+    # remove a new marker that could be created by an unrelated user action.
+    $ownsUpdateMarker = $false
+    Write-Host "EyeUrAI's NSIS update relaunch ignored inherited --hidden, showed PID $updateAppProcessId, and consumed its visibility marker."
+  } finally {
+    Stop-SmokeProcess -ProcessId $updateAppProcessId
+    Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $updateStartupMarkerPath
+    Stop-SmokeProcessesAtExecutable -ExecutablePath $executablePath
+    if ($null -ne $updateInstaller -and -not $updateInstaller.HasExited) {
+      Stop-Process -Id $updateInstaller.Id -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  if ((Test-Path -LiteralPath $updateMarkerPath) -or
+      (Test-Path -LiteralPath $updateMarkerTempPath)) {
+    throw "A visibility marker exists, so the plain --hidden launch cannot be tested safely."
+  }
+
+  $hiddenMarkerPath = New-StartupMarkerLease -Name "hidden"
+  try {
+    $hiddenApp = Start-SmokeProcess `
+      -FilePath $executablePath `
+      -Arguments @(
+        "--hidden",
+        "--startup-smoke-marker=$hiddenMarkerPath"
+      )
+    $hiddenProcessId = Wait-NativeBridgeReady `
+      -MarkerPath $hiddenMarkerPath `
+      -ExpectedProcessId $hiddenApp.Id
+    Assert-MainWindowRemainsHidden -ProcessId $hiddenProcessId
+
+    if (Test-Path -LiteralPath $updateMarkerPath) {
+      throw "A plain --hidden launch unexpectedly created an update visibility marker."
+    }
+    Write-Host "EyeUrAI's plain --hidden launch reached the native bridge and kept PID $hiddenProcessId hidden."
+  } finally {
+    if ($null -ne $hiddenApp) {
+      Stop-SmokeProcess -ProcessId $hiddenApp.Id
+    }
+    Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $hiddenMarkerPath
+  }
+} finally {
+  if ($null -ne $freshApp) {
+    Stop-SmokeProcess -ProcessId $freshApp.Id
+  }
+  Stop-SmokeProcess -ProcessId $updateAppProcessId
+  if ($null -ne $hiddenApp) {
+    Stop-SmokeProcess -ProcessId $hiddenApp.Id
+  }
+
+  Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $freshMarkerPath
+  Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $updateStartupMarkerPath
+  Stop-ProcessesForMarker -ExecutablePath $executablePath -MarkerPath $hiddenMarkerPath
+  Stop-SmokeProcessesAtExecutable -ExecutablePath $executablePath
+
+  if ($null -ne $updateInstaller -and -not $updateInstaller.HasExited) {
+    Stop-Process -Id $updateInstaller.Id -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($ownsUpdateMarker) {
+    Remove-Item -LiteralPath $updateMarkerPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $updateMarkerTempPath -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath $markerDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}

@@ -37,6 +37,16 @@ function describeError(error: unknown): string {
   return "Could not read quota data.";
 }
 
+function isOlderSnapshot(next: Snapshot, current: Snapshot): boolean {
+  const nextGeneratedAt = Date.parse(next.generatedAt);
+  const currentGeneratedAt = Date.parse(current.generatedAt);
+  return (
+    Number.isFinite(nextGeneratedAt) &&
+    Number.isFinite(currentGeneratedAt) &&
+    nextGeneratedAt < currentGeneratedAt
+  );
+}
+
 /** Demo data is a development tool, never a production fallback. */
 export function resolveSnapshotMode(native: boolean, development: boolean): SnapshotMode {
   if (native) return "live";
@@ -64,6 +74,7 @@ export function useSnapshot(
   const inFlight = useRef(false);
   const queuedLoad = useRef<LoadOptions | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
+  const snapshotVersion = useRef(0);
   const loadRef = useRef<(options: LoadOptions) => Promise<void>>(async () => {});
 
   useEffect(() => {
@@ -75,7 +86,12 @@ export function useSnapshot(
   }, []);
 
   const apply = useCallback((next: Snapshot) => {
+    const current = snapshotRef.current;
+    // A pushed snapshot can overtake an IPC request that was already in flight.
+    // Only reject a response when both timestamps are valid and prove it is older.
+    if (current && isOlderSnapshot(next, current)) return;
     snapshotRef.current = next;
+    snapshotVersion.current += 1;
     if (!mounted.current) return;
     setSnapshot(next);
     setPhase("ready");
@@ -93,6 +109,7 @@ export function useSnapshot(
         };
         return;
       }
+      const snapshotVersionAtStart = snapshotVersion.current;
       inFlight.current = true;
       if (options.manual && mounted.current) setRefreshing(true);
 
@@ -133,6 +150,9 @@ export function useSnapshot(
         apply(next);
       } catch (cause) {
         if (!mounted.current) return;
+        // A request that was overtaken by an accepted push must not put an
+        // error banner over the newer snapshot.
+        if (snapshotVersion.current !== snapshotVersionAtStart) return;
         setError(describeError(cause));
         setPhase(snapshotRef.current ? "ready" : "error");
       } finally {

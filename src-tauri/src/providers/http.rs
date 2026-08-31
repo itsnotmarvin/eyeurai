@@ -205,7 +205,7 @@ impl HttpClient {
 
     async fn read_json_response<T: DeserializeOwned>(
         &self,
-        response: reqwest::Response,
+        mut response: reqwest::Response,
         url: &str,
     ) -> Result<T, ProviderError> {
         let status = response.status();
@@ -215,8 +215,9 @@ impl HttpClient {
             .and_then(|v| v.to_str().ok())
             .and_then(parse_retry_after);
 
-        if let Some(len) = response.content_length() {
-            if len as usize > MAX_BODY_BYTES {
+        let content_length = response.content_length();
+        if let Some(len) = content_length {
+            if len > MAX_BODY_BYTES as u64 {
                 return Err(ProviderError::parse(format!(
                     "response from {} is {} bytes, above the {} byte cap",
                     host_of(url),
@@ -226,18 +227,26 @@ impl HttpClient {
             }
         }
 
-        let body = response
-            .text()
+        let mut body = Vec::with_capacity(content_length.unwrap_or(0) as usize);
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|e| classify_transport_error(&e, url))?;
-
-        if body.len() > MAX_BODY_BYTES {
-            return Err(ProviderError::parse(format!(
-                "response from {} exceeded the {} byte cap",
-                host_of(url),
-                MAX_BODY_BYTES
-            )));
+            .map_err(|e| classify_transport_error(&e, url))?
+        {
+            // Check before extending so a chunked response (or a server lying
+            // about Content-Length) can never make us allocate beyond the cap.
+            if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+                return Err(ProviderError::parse(format!(
+                    "response from {} exceeded the {} byte cap",
+                    host_of(url),
+                    MAX_BODY_BYTES
+                )));
+            }
+            body.extend_from_slice(&chunk);
         }
+        // Match reqwest's `text()` behaviour without first buffering an
+        // unbounded body: invalid UTF-8 is replaced lossily.
+        let body = String::from_utf8_lossy(&body).into_owned();
 
         if !status.is_success() {
             return Err(classify_status(
@@ -436,6 +445,52 @@ mod tests {
     use super::*;
     use crate::models::ProviderErrorKind;
     use serde::Deserialize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn spawn_chunked_response(
+        chunks: Vec<Vec<u8>>,
+        hold_open: Option<oneshot::Receiver<()>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept test request");
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request).await;
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      Content-Type: application/json\r\n\
+                      Transfer-Encoding: chunked\r\n\
+                      Connection: close\r\n\r\n",
+                )
+                .await
+                .expect("write response headers");
+
+            for chunk in chunks {
+                let prefix = format!("{:X}\r\n", chunk.len());
+                if stream.write_all(prefix.as_bytes()).await.is_err()
+                    || stream.write_all(&chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+
+            if let Some(release) = hold_open {
+                let _ = release.await;
+            }
+            let _ = stream.write_all(b"0\r\n\r\n").await;
+        });
+
+        (format!("http://{address}/usage"), server)
+    }
 
     #[test]
     fn retry_after_accepts_delta_seconds() {
@@ -494,6 +549,50 @@ mod tests {
     #[derive(Debug, Deserialize, PartialEq)]
     struct Sample {
         value: u32,
+    }
+
+    #[tokio::test]
+    async fn chunked_response_is_rejected_as_soon_as_it_exceeds_the_body_cap() {
+        let (release, hold_open) = oneshot::channel();
+        let (url, server) = spawn_chunked_response(
+            vec![vec![b' '; MAX_BODY_BYTES], vec![b'x']],
+            Some(hold_open),
+        )
+        .await;
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+        };
+        let request = JsonRequest::new(&url, "eyeurai-test");
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_json_once::<Sample>(&request),
+        )
+        .await
+        .expect("body reader should reject before the streaming response ends");
+        let err = result.expect_err("oversized chunked body should be rejected");
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("exceeded the 1048576 byte cap"));
+
+        let _ = release.send(());
+        server.await.expect("test server task");
+    }
+
+    #[tokio::test]
+    async fn chunked_response_within_the_body_cap_still_decodes() {
+        let (url, server) =
+            spawn_chunked_response(vec![br#"{"value":"#.to_vec(), b"7}".to_vec()], None).await;
+        let client = HttpClient {
+            inner: reqwest::Client::new(),
+        };
+        let request = JsonRequest::new(&url, "eyeurai-test");
+
+        let sample = client
+            .get_json_once::<Sample>(&request)
+            .await
+            .expect("valid chunked JSON should decode");
+        assert_eq!(sample, Sample { value: 7 });
+        server.await.expect("test server task");
     }
 
     #[test]

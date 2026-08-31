@@ -18,6 +18,10 @@ use crate::providers::credentials::default_descriptors;
 use crate::providers::{ProviderContext, ProviderRegistry};
 use crate::remediation::{self, AuthorizedAction, RemediationStore};
 
+/// The longest user-selectable refresh interval is five minutes. Any cached
+/// value older than that must stop presenting itself as live quota data.
+const IN_PROCESS_CACHE_STALE_AFTER_SECONDS: i64 = 5 * 60;
+
 pub struct AppState {
     registry: Arc<ProviderRegistry>,
     context: Arc<ProviderContext>,
@@ -36,8 +40,16 @@ struct CachedSnapshot {
 impl AppState {
     pub fn new(app_data_dir: PathBuf) -> Result<Self, String> {
         let context = ProviderContext::new().map_err(|error| error.to_string())?;
-        let account_registry =
-            AccountSnapshotRegistry::load(&app_data_dir).map_err(|error| error.to_string())?;
+        let account_registry = match AccountSnapshotRegistry::load(&app_data_dir) {
+            Ok(registry) => registry,
+            Err(_) => {
+                // Retained snapshots are an optional, secret-free cache. A
+                // damaged or temporarily unreadable cache must never prevent
+                // live provider monitoring (or the app itself) from starting.
+                eprintln!("EyeUrAI could not read the account snapshot registry");
+                AccountSnapshotRegistry::empty(&app_data_dir)
+            }
+        };
         Ok(Self {
             registry: Arc::new(ProviderRegistry::with_defaults()),
             context: Arc::new(context),
@@ -54,7 +66,7 @@ impl AppState {
             return None;
         }
         let mut snapshot = cached.snapshot;
-        snapshot.refresh_countdowns(self.context.now());
+        snapshot.refresh_cached(self.context.now(), IN_PROCESS_CACHE_STALE_AFTER_SECONDS);
         Some(snapshot)
     }
 

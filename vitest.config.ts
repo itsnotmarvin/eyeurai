@@ -10,6 +10,10 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     clearMocks: true,
+    // The jsdom-heavy App suites can exceed Vitest's per-test timeout when a
+    // high-core machine starts one worker per file. Two workers are faster in
+    // practice and keep local/CI runs deterministic instead of CPU-thrashing.
+    maxWorkers: 2,
     coverage: {
       reporter: ["text", "html"],
     },
